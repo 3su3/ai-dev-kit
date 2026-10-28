@@ -206,6 +206,12 @@ Strategy（Minimal / Pattern / Robust）が指定されている場合はその�
 
 ```bash
 git diff --stat <base>...HEAD
+bin/plan-vs-diff <計画のパス> --base <base>   # 計画の「修正対象」と集合で比べる
+```
+
+**`plan-vs-diff` が使えない環境なら、同じことを手で回す。**
+
+```bash
 comm -3 <(git diff --name-only <base>...HEAD | sort) <(計画の「修正対象」を1行1ファイルで | sort)
 ```
 
