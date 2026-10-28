@@ -38,7 +38,8 @@ gh pr view --json body,files                             # PR に計画が乗っ
 4. **実装** — `implementer.md` に従う。重要な振る舞いには**TDD（Red → Green → Refactor）**を適用する
 5. **レビュー** — `review-discipline` スキルに従い、**別セッションで**行う
 6. **実機での確認**（その段がある場合） — 検証環境へ反映して確かめる工程。
-   **いつ行うかは対象リポジトリの規約と計画が決める。** ここでは順番を決めない
+   **いつ行うかは対象リポジトリの規約と計画が決める。** ここでは順番を決めない。
+   報告は `verification-report.md`。**結論（問題なし / 懸念あり）を1語目に置く**
 
 ## どれを読むか
 
@@ -50,6 +51,7 @@ gh pr view --json body,files                             # PR に計画が乗っ
 | 方針を選ぶ | `strategies.md` |
 | モデルを選ぶ | `model-policy.md` |
 | 複数案を比べる | `compare-template.md` |
+| 実機で確かめたあと報告する | `verification-report.md` |
 | 流れ全体を確認する | `workflow.md` |
 
 ## 実装方針を名指しで選ぶ
