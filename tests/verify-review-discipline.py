@@ -109,6 +109,21 @@ def main():
         check("観点が 1 つ以上ある", len(names) >= 1, f"{names}")
         for n in names:
             check(f"詳細側にもある: {n}", n in pc.read_text(encoding="utf-8"))
+    # **要約の出どころは常時読みに要る。** 要約を書くのもレビューと同じ
+    # エージェントで、読み違えると「自信のある誤った要約」が出る。読む人は
+    # 不慣れな分野でそれを読むので気づけない。**誤った要約は無いより悪い。**
+    check("常時読みに要約がある", "「この PR」の3行から始める" in skill_body)
+    check("出どころを書けと言っている", "出どころを書く" in skill_body)
+    sel = (SKILL_DIR / "selection.md").read_text(encoding="utf-8")
+    check("詳細側に出どころの説明がある", "無いより悪い" in sel)
+    check("影響範囲が3行目だと両方に書いてある",
+          "影響範囲" in skill_body and "影響範囲" in sel)
+
+    # **要約は件数と関係なく出す。** 候補一覧を飛ばすと要約ごと消えていた
+    # （2026-10-28 の実測。4 件を「少ない」と判断して一覧ごと飛ばした）。
+    check("要約が候補一覧の外にある", "候補一覧を出さない回も書く" in skill_body)
+    check("詳細側にも理由がある", "一覧の外へ出した" in sel)
+
     for must in ("手戻りが確定", "未実行"):
         check(f"常時読みに届いている: {must}", must in skill_body)
 
