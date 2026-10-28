@@ -45,6 +45,15 @@ def main():
 
     if not files:
         sys.exit("git ls-files が空。検査が成立しない")
+    # **一覧が正本なので、上位に照合先が無い。** 中身は検査できないが、
+    # **うっかり減らした**ことは件数で捕まえられる（歯止め。測った数ではない）。
+    from vocabulary import WORK_TERMS, UNDECIDED_TERMS
+    n = len(WORK_TERMS) + len(UNDECIDED_TERMS)
+    MIN_TERMS = 6
+    if n < MIN_TERMS:
+        sys.exit(f"要注意語が {n} 語。{MIN_TERMS} 語を下回った。"
+                 "減らすなら、この下限も一緒に下げる（意図した削除かを示す）")
+
     print(f"  追跡ファイル {len(files)} 件を見た（{', '.join(EXCLUDE)} を除く）")
 
     # **履歴も見る。** 公開すると過去のコミットも全部読める。
