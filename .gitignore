@@ -1,0 +1,6 @@
+*.bak-*
+terms/*
+!terms/example.txt
+local/*
+!local/example.md
+.serena/

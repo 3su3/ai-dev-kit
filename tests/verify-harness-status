@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""harness-status が「引き上げ待ち」を取りこぼさないかを測る。
+
+人工の memory ディレクトリを作り、3つの変化を起こして全部拾えるか見る。
+  1. memory が増える          → 「増えた」に出る
+  2. 再発回数が上がる          → 「再発が増えた」に出る（これが引き上げの合図）
+  3. memory が消える          → 「消えた」に出る
+変化が無いときに何も出ないこと（偽の警告を出さない）も見る。
+"""
+import pathlib, shutil, subprocess, sys, tempfile
+
+BIN = pathlib.Path(__file__).resolve().parent.parent / "bin" / "harness-status"
+
+
+def write(d, name, desc, body):
+    (d / f"{name}.md").write_text(
+        f"---\nname: {name}\ndescription: {desc}\nmetadata:\n  type: feedback\n---\n\n{body}\n",
+        encoding="utf-8")
+
+
+def run(mem, snap, *extra):
+    r = subprocess.run([sys.executable, str(BIN), "--dir", str(mem), "--snapshot", str(snap), *extra],
+                       capture_output=True, text=True)
+    return r.stdout + r.stderr
+
+
+def main():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    mem, snap = tmp / "memory", tmp / "snap.json"
+    mem.mkdir()
+    write(mem, "alpha-rule", "いつもの手順", "普通の本文。")
+    write(mem, "repeat-rule", "繰り返した話", "**2回やった**ので直したい。")
+
+    ok = True
+    def check(name, cond):
+        nonlocal ok
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
+        ok &= cond
+
+    print("\n## 初回（基準なし）")
+    out = run(mem, snap)
+    check("基準が無いと伝える", "基準が無い" in out)
+    check("再発ありを③候補に挙げる", "repeat-rule" in out)
+
+    run(mem, snap, "--mark")
+    print("\n## 変化なし")
+    out = run(mem, snap)
+    check("偽の警告を出さない", "（差分なし）" in out)
+
+    # 3つの変化を同時に起こす
+    write(mem, "new-rule", "新しく書かれた話", "本文。")
+    write(mem, "repeat-rule", "繰り返した話", "**4回やった**ので直したい。")
+    (mem / "alpha-rule.md").unlink()
+
+    print("\n## 増えた / 再発が増えた / 消えた")
+    out = run(mem, snap)
+    check("増えた memory を拾う", "new-rule" in out.split("## 再発")[0])
+    check("再発の増加を拾う（2 → 4）", "2 → 4" in out)
+    check("消えた memory を拾う", "alpha-rule" in out.split("## 消えた")[-1])
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("\n" + ("すべて PASS" if ok else "FAIL あり"))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

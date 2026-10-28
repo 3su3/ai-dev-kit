@@ -1,0 +1,13 @@
+# プロジェクト固有語の雛形。`terms/<slug>.txt` に置く。
+#   slug = プロジェクトの絶対パスの英数字以外を `-` に置換したもの
+#   例: /Users/me/work/myapp → -Users-me-work-myapp → terms/-Users-me-work-myapp.txt
+#
+# この語彙に当たるかどうかで、memory が「普遍的な手法」か
+# 「そのプロジェクトの運用知識」かを切り分ける。
+#
+# terms/ は .gitignore 済み。社内用語を公開リポジトリへ出さないため。
+#
+# 1行1語。`#` から行末はコメント。
+myapp
+staging
+production

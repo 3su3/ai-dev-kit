@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""at-rev が「過去を今日の木で数える」取り違えを実際に止めるかを測る。
+
+3つの数え方を比べる。
+  A 誤った方法 : 対象一覧を**今日の木**で解決し、中身だけ `git show <rev>:<path>` で引く
+  B at-rev     : <rev> の木を実体化し、その中で同じ定義関数を走らせる
+  C 独立な正解 : `git ls-tree <rev>` から直接作る（AともBとも別経路）
+
+合格条件
+  1. B == C            at-rev が独立な正解と一致する
+  2. A <  C            誤った方法は取りこぼす（この取り違えが実在する）
+  3. C - A == 消えたファイル分   差が説明できる（偶然の一致ではない）
+  4. rev=HEAD では A == B == C  既知の陰性。偽の警告を出さない
+
+**雛形リポジトリを作って、その中で測る。** 特定のリポジトリの道具や履歴に依存すると、
+他の人の環境で成立しない（以前は別リポジトリの道具を前提にしており、
+このリポジトリ単体では一度も通っていなかった）。
+"""
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+AT_REV = pathlib.Path(__file__).resolve().parent.parent / "bin" / "at-rev"
+SCOPE = "assets"          # 対象ディレクトリ
+EXCLUDED = {"skip.txt"}   # 定義関数が除外するもの
+
+# 雛形の中に置く「対象の定義関数」。本物の道具と同じ役割で、
+# **一覧を手で並べず、その木を走査して決める**。
+TOOL = '''#!/usr/bin/env python3
+import json, os, sys
+EXCLUDED = {"skip.txt"}
+def targets(root="."):
+    out = []
+    for dirpath, _, names in os.walk(os.path.join(root, "assets")):
+        for n in sorted(names):
+            if n.endswith(".txt") and n not in EXCLUDED:
+                out.append(os.path.relpath(os.path.join(dirpath, n), root))
+    return sorted(out)
+if __name__ == "__main__":
+    print(json.dumps(targets(".")))
+'''
+
+
+def git(*a, cwd):
+    r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"git {' '.join(a)}:\n{r.stderr}")
+    return r.stdout
+
+
+# **古い時点の道具**。当時はこうだった、という体で意図的に違う結果を返す。
+# これが無いと「道具を運ばなくても通る」雛形になり、at-rev の存在意義を検査できない。
+OLD_TOOL = '''#!/usr/bin/env python3
+import json
+print(json.dumps([]))   # 当時はまだ何も数えられなかった
+'''
+
+
+def build(repo):
+    """3世代の履歴を作る。old にあって HEAD に無いファイルを必ず含める。
+
+    **道具も世代で変える。** old の木には古い道具が入っており、at-rev が
+    今日の道具を持ち込まなければ、B は古い道具の結果（空）になる。
+    """
+    (repo / "assets").mkdir()
+    (repo / "bin").mkdir()
+    (repo / "bin" / "survey").write_text(OLD_TOOL, encoding="utf-8")
+    os.chmod(repo / "bin" / "survey", 0o755)
+    git("init", "-q", "-b", "main", cwd=repo)
+    git("config", "user.email", "t@e.com", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    for n in ("a.txt", "b.txt", "gone-1.txt", "gone-2.txt", "skip.txt"):
+        (repo / "assets" / n).write_text(n, encoding="utf-8")
+    git("add", "-A", cwd=repo); git("commit", "-qm", "init", cwd=repo)
+    old = git("rev-parse", "HEAD", cwd=repo).strip()
+
+    # 2件を削除。**ここが取りこぼしの元**（old にあって今日は無い）
+    for n in ("gone-1.txt", "gone-2.txt"):
+        (repo / "assets" / n).unlink()
+    # 道具を今日の版へ（old の木には古い版が残る）
+    (repo / "bin" / "survey").write_text(TOOL, encoding="utf-8")
+    os.chmod(repo / "bin" / "survey", 0o755)
+    git("add", "-A", cwd=repo); git("commit", "-qm", "remove two", cwd=repo)
+    # 今日だけにあるものも足す（両方向に差を作る）
+    (repo / "assets" / "new.txt").write_text("new", encoding="utf-8")
+    git("add", "-A", cwd=repo); git("commit", "-qm", "add one", cwd=repo)
+    return old, git("rev-parse", "HEAD", cwd=repo).strip()
+
+
+def today_targets(repo):
+    r = subprocess.run([sys.executable, str(repo / "bin" / "survey")],
+                       cwd=repo, capture_output=True, text=True)
+    return sorted(json.loads(r.stdout))
+
+
+def count_C(repo, rev):
+    """独立な正解: rev の tree から直接作る。"""
+    names = git("ls-tree", "-r", "--name-only", rev, "--", SCOPE, cwd=repo).splitlines()
+    return sorted(p for p in names
+                  if p.endswith(".txt") and os.path.basename(p) not in EXCLUDED)
+
+
+def count_A(repo, rev):
+    """誤った方法: 一覧は今日の木、中身だけ git show。rev に無いものは静かに消える。"""
+    out = []
+    for p in today_targets(repo):
+        r = subprocess.run(["git", "show", f"{rev}:{p}"], cwd=repo,
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            out.append(p)
+    return sorted(out)
+
+
+def count_B(repo, rev):
+    """at-rev: rev の木を実体化し、その中で同じ定義関数を走らせる。"""
+    r = subprocess.run([sys.executable, str(AT_REV), rev, "--bring", "bin",
+                        "--", sys.executable, "bin/survey"],
+                       cwd=repo, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"at-rev 失敗:\n{r.stderr}")
+    return sorted(json.loads(r.stdout.strip().splitlines()[-1]))
+
+
+def check(repo, rev, label, expect_gap):
+    A, B, C = count_A(repo, rev), count_B(repo, rev), count_C(repo, rev)
+    gone = sorted(set(C) - set(A))
+    ok = [("B == C（at-rev が独立な正解と一致）", B == C)]
+    if expect_gap:
+        ok.append(("A < C（誤った方法は取りこぼす）", len(A) < len(C)))
+        # 左辺（A の実測）と右辺（今日の木から独立に導いた期待）は別経路で作る
+        expected_gone = set(C) - set(today_targets(repo))
+        ok.append((f"取りこぼし == rev にあり今日は無い対象（{len(expected_gone)} 件）",
+                   set(C) - set(A) == expected_gone and len(expected_gone) > 0))
+    else:
+        ok.append(("A == B == C（偽の警告を出さない）", A == B == C))
+    print(f"\n## {label}  rev={rev[:12]}")
+    print(f"  A 誤った方法 : {len(A):3d} 件")
+    print(f"  B at-rev     : {len(B):3d} 件")
+    print(f"  C 独立な正解 : {len(C):3d} 件")
+    for p in gone:
+        print(f"    取りこぼし - {p}")
+    allok = True
+    for name, v in ok:
+        print(f"  [{'PASS' if v else 'FAIL'}] {name}")
+        allok &= v
+    return allok
+
+
+def main():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = pathlib.Path(tmp) / "fixture"
+        repo.mkdir()
+        old, head = build(repo)
+        allok = True
+        allok &= check(repo, old, "既知の陽性（ファイルが消される前の時点）", expect_gap=True)
+        allok &= check(repo, head, "既知の陰性（rev = HEAD）", expect_gap=False)
+    print("\n" + ("すべて PASS" if allok else "FAIL あり"))
+    print("NOTE: 雛形リポジトリで見ている。特定のリポジトリの履歴に依存しない")
+    return 0 if allok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

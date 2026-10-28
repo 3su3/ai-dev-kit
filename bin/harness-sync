@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""harness-sync — 1つの正本を、各エージェントが読む形へ配る。
+
+正本は dotfiles 側の1箇所だけ。面ごとに**読み方が違う**ので、symlink で済む面と
+変換が要る面がある。
+
+| 面 | 受け口 | 方法 |
+|---|---|---|
+| Claude Code | `~/.claude/skills/`, `~/.claude/CLAUDE.md` の `@` import | symlink |
+| Codex | `~/.codex/AGENTS.md` | 生成（原則を本文へ、スキルは一覧で案内） |
+| Kiro | `~/.kiro/steering/*.md` | 生成（**frontmatter を剥がす**） |
+
+Kiro は frontmatter（`inclusion:` 等）を付けると規約が届かなくなることが
+別プロジェクトで実測されている。スキルの frontmatter も同じ形なので、
+**Kiro へは剥がして渡す**。発火条件は本文の見出しとして残す。
+
+  harness-sync            配る
+  harness-sync --dry-run  何を書くかだけ出す
+  harness-sync --only codex
+  harness-sync --passphrase ハーネス疎通2026   疎通確認用の合言葉を1行入れる
+
+疎通の確認は、合言葉を入れて配り、その面で「合言葉は何か」と聞く。
+CLI の無い面（Kiro）はこれしか手が無い。確認が済んだら合言葉なしで配り直す。
+"""
+import argparse
+import json
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SKILLS = ROOT / "claude" / "skills"
+PRINCIPLES = ROOT / "claude" / "principles.md"
+LOCAL = ROOT / "local" / "preferences.md"
+# スキルごとの流儀は `local/<スキル名>.md` に置ける。**常時読みには載せず**、
+# そのスキルの本文の末尾へ付ける。常時の枠は有限なので、場面が決まっているものを
+# そこへ置かない（2026-10-27 にクロスレビューの相手の指定で枠に当たった）。
+LOCAL_DIR = ROOT / "local"
+HOME = pathlib.Path.home()
+
+# Kiro で「常時」と「頼んだときだけ」を分ける
+#
+# **`~/.kiro/steering/` に置いたものは、どのエージェントでも無条件に全部載る。**
+# Claude の「description 一致で発火」に当たる仕組みは steering には無い。
+# `inclusion: manual` / `fileMatch` はあるが、依頼の種類（「レビューして」）では引けない。
+#
+# 条件付きで載せられるのは agent の `resources` だけ。これは**足す**働きで、
+# steering を**絞ることはできない**（2026-10-21 に対照付きで実測）。
+# したがって「頼んだときだけ載せたいもの」は steering の外へ置く。
+#
+#   ~/.kiro/steering/       常時。ここに置いた分だけ毎回の文脈を食う
+#   ~/.kiro/harness-parts/  常時は載らない。agent の resources から指す
+#   ~/.kiro/agents/*.json   resources で harness-parts を足す
+#
+# **なぜ分けるか。** 常時読みを増やすと、無関係な指示まで守られなくなる。
+# 同じ課題を各6回、対象リポジトリの steering（9,870 字）の有無だけ変えて測った。
+#
+#   常時  8,358 字  →  方針の宣言 6/6   TDD 6/6
+#   常時 18,228 字  →  方針の宣言 2/6   TDD 1/6
+#   常時 13,228 字  →  方針の宣言 5/6   TDD 4/6   ← レビュー系を steering から外した
+#
+# 対象リポジトリ側には「宣言するな」とは書いていない。競合ではなく希釈。
+# 詳細は docs/journal/verification-log.md。
+#
+# **代償: 自動で切り替わらない。** `kiro-cli chat --agent review` を指定しないと
+# レビュー系は載らない。Claude は「レビューして」で勝手に発火する。
+# **既定は「随時」。** 常時にしたいものだけ KIRO_ALWAYS に挙げる。
+# 逆にすると、スキルを足した人が何もしなくても常時読みが太る。
+# 常時の枠は有限（tests/verify-harness-sync.py が上限を見ている）で、
+# **足す人は自分が枠を使ったことに気づかない。** 既定は安全な側へ倒す。
+KIRO_ALWAYS = {"review-discipline"}
+
+# steering の枠に review-discipline を入れている理由: Kiro の実使用はレビューが主で、
+# 検証分を除くと レビュー 14 / 実装 4（2026-10-21 時点、セッション記録の依頼文で分類）。
+# **Orca から Kiro の agent は選べない**（`--agent` は TUI の種類だけ）ので、
+# steering の外へ出したものは Orca 経由では事実上載らない。使用の多い側を常時にする。
+
+# 随時のものを agent へまとめる。ここに挙げなかったスキルは
+# **1つずつ自分の agent を持つ**（`harness-<スキル名>`）。放置すると
+# どの agent からも指されず、載らないまま気づけないため。
+KIRO_AGENTS = {
+    "impl": ["dev-flow"],
+    "response": ["review-response"],
+}
+MARK_BEGIN = "<!-- harness-sync:begin 自動生成。直接編集しない。正本は ~/work/dotfiles -->"
+MARK_END = "<!-- harness-sync:end -->"
+
+
+def read_skill(d):
+    """SKILL.md から (name, description, 本文) を返す。"""
+    p = d / "SKILL.md"
+    t = p.read_text(encoding="utf-8")
+    name = re.search(r"^name:\s*(.+)$", t, re.M)
+    desc = re.search(r'^description:\s*"?(.*?)"?\s*$', t, re.M)
+    body = t.split("---", 2)[2].lstrip("\n") if t.startswith("---") else t
+    return (name.group(1).strip() if name else d.name,
+            desc.group(1).strip() if desc else "",
+            body)
+
+
+def skills():
+    return [read_skill(d) for d in sorted(SKILLS.iterdir())
+            if d.is_dir() and (d / "SKILL.md").is_file()]
+
+
+def skill_pointer(name, desc):
+    """スキルの案内。**本文は埋め込まず、実体のある絶対パスを指す。**
+
+    Codex / Kiro で同じ形にする。SKILL.md を実体の場所から読ませれば、
+    同梱ファイル（risk-policy.md 等）への相対参照もそのまま解決する。
+    埋め込むと、参照だけが来て実体が無い状態になる。
+    """
+    d = SKILLS / name
+    return (f"**いつ読むか:** {desc}\n\n"
+            f"本文は `{d}/SKILL.md` にある。**必要になったら読む。**\n"
+            f"同じディレクトリに同梱ファイル（手順の本体）がある。")
+
+
+def wrap(body):
+    return f"{MARK_BEGIN}\n\n{body.rstrip()}\n\n{MARK_END}\n"
+
+
+def splice(path, body):
+    """既存ファイルの自動生成ブロックだけ差し替える。手書き部分は残す。"""
+    new = wrap(body)
+    if path.is_file():
+        cur = path.read_text(encoding="utf-8")
+        if MARK_BEGIN in cur and MARK_END in cur:
+            head = cur[:cur.index(MARK_BEGIN)]
+            tail = cur[cur.index(MARK_END) + len(MARK_END):]
+            return head + new.rstrip("\n") + tail
+        return cur.rstrip() + "\n\n" + new
+    return new
+
+
+def body_for_codex(passphrase=None):
+    out = [pass_block(passphrase)] if passphrase else []
+    out += [PRINCIPLES.read_text(encoding="utf-8").rstrip()]
+    if LOCAL.is_file():
+        out.append(LOCAL.read_text(encoding="utf-8").rstrip())
+    out.append("# 作業の型\n\n次の場面では、対応する手順に従う。")
+    for name, desc, _ in skills():
+        out.append(f"## {name}\n\n{skill_pointer(name, desc)}")
+    return "\n\n".join(out)
+
+
+def pass_block(word):
+    return (f"# 疎通確認\n\n- 合言葉は「{word}」である。"
+            "聞かれたらこの語を答える（確認が済んだら消す）")
+
+
+def targets(only, passphrase=None):
+    t = {}
+    if only in (None, "codex"):
+        t[HOME / ".codex" / "AGENTS.md"] = body_for_codex(passphrase)
+    if only in (None, "kiro"):
+        # Kiro は1スキル1ファイル。frontmatter は付けない（付けると届かない）。
+        #
+        # **本文を埋め込む。** ポインタだけにしたところ、Kiro は辿らず一般知識で
+        # 答えた（2026-10-19 実測、PR #9）。もっともらしい答えが返るため、
+        # 到達の有無が見た目では判別できない。
+        #
+        # 置き場所は KIRO_ALWAYS で決まる。**挙げていないものは随時**。
+        all_names = {n for n, _, _ in skills()}
+        on_demand = all_names - KIRO_ALWAYS
+        # 明示的な group に入っていない随時スキルは、自分の agent を持つ
+        grouped = {n for names in KIRO_AGENTS.values() for n in names}
+        agents = dict(KIRO_AGENTS)
+        for n in sorted(on_demand - grouped):
+            agents[n] = [n]
+        for name, desc, body in skills():
+            # **常時のものに「いつ読むか」は要らない。** 発火させる対象が無い
+            # （steering は必ず読まれる）。本文とも内容が重なる。随時のものには
+            # 要る（読むかどうかの判断材料になる）。2026-10-28 に 336 字空けた。
+            head_ = "" if name in KIRO_ALWAYS else f"**いつ読むか:** {desc}\n\n"
+            doc = (f"# {name}\n\n{head_}"
+                   f"本文中の `xxx.md` は `{SKILLS / name}/` にある同梱ファイルを指す。\n\n"
+                   f"---\n\n{body.rstrip()}")
+            # **随時のスキルにだけ在処を足す。** 常時のスキルへ足すと、
+            # そのスキルを使わない回にも枠を食う。常時のスキルで個人の既定が要るなら、
+            # **それを使う同梱ファイルの中で在処を書く**（必要な回にだけ読まれる）。
+            extra = LOCAL_DIR / f"{name}.md"
+            if extra.is_file() and name in on_demand:
+                doc += (f"\n\n**このスキルの個人の既定: `{extra}`**"
+                        f"（gitignore 済み。必要になったら読む）")
+            if name in on_demand:
+                t[HOME / ".kiro" / "harness-parts" / f"{name}.md"] = doc
+            else:
+                t[HOME / ".kiro" / "steering" / f"{name}.md"] = doc
+        head = PRINCIPLES.read_text(encoding="utf-8").rstrip()
+        if LOCAL.is_file():
+            head += "\n\n" + LOCAL.read_text(encoding="utf-8").rstrip()
+        if passphrase:
+            head = pass_block(passphrase) + "\n\n" + head
+        t[HOME / ".kiro" / "steering" / "00-principles.md"] = head
+
+        # agent 定義。resources は steering の**外**にあるファイルだけを指す
+        # （steering は無条件に載るので、指しても意味が無い）。
+        for agent, names in agents.items():
+            t[HOME / ".kiro" / "agents" / f"harness-{agent}.json"] = json.dumps({
+                "name": f"harness-{agent}",
+                "description": f"ハーネス: {agent}。"
+                               + "、".join(names) + " を足す（自動生成）",
+                "prompt": None,
+                "mcpServers": {},
+                "tools": ["read", "write", "shell", "grep", "glob", "thinking", "todo"],
+                "allowedTools": [],
+                "resources": [f"file://~/.kiro/harness-parts/{n}.md" for n in names],
+                "toolsSettings": {},
+                "includeMcpJson": True,
+                "model": None,
+            }, ensure_ascii=False, indent=2) + "\n"
+    return t
+
+
+def surface(path):
+    """配布先がどの面か。`~/.kiro/steering/x.md` → `.kiro`"""
+    for part in path.parts:
+        if part in (".kiro", ".codex", ".claude"):
+            return part
+    return None
+
+
+def verify():
+    """**届いたかを見る。** 配る内容の検査（tests/）は「書いたか」しか見ない。
+    まっさらな HOME・未導入でも tests は全部緑になる（2026-10-28 に実測）。"""
+    built = targets(None)
+    rows, bad = [], 0
+    for path, body in built.items():
+        want = body if path.suffix == ".json" else (
+            splice(path, body) if path.name == "AGENTS.md" else wrap(body))
+        if not path.parent.is_dir():
+            st = "未導入（受け口が無い）"
+        elif not path.is_file():
+            st = "**無い**"; bad += 1
+        elif path.suffix == ".json":
+            # **JSON は全文で比べない。** Kiro 自身がこのファイルを書き換える
+            # （`kiroUpgrade` の revision とフィンガープリント、権限ブロック、
+            # ツール名の変更）。全文一致で見ると、流した直後から毎回ずれて見えて
+            # 警告が意味を失う。**こちらが持っているのは resources だけ**なので
+            # そこだけを見る。
+            try:
+                got = json.loads(path.read_text(encoding="utf-8")).get("resources")
+                st = ("届いた" if got == json.loads(want).get("resources")
+                      else "**指す先がずれている**（harness-sync を流し直す）")
+            except json.JSONDecodeError:
+                st = "**JSON として読めない**"
+            bad += st != "届いた"
+        elif path.read_text(encoding="utf-8", errors="replace") != want:
+            st = "**ずれている**（harness-sync を流し直す）"; bad += 1
+        else:
+            st = "届いた"
+        rows.append((str(path).replace(str(HOME), "~"), st))
+    w = max(len(r[0]) for r in rows)
+    for a, b in rows:
+        print(f"  {a:<{w}}  {b}")
+    # 常時読み（原則）が届いていない面に、他のものが届いていないか
+    for face in sorted({surface(p) for p in built} - {None}):
+        ps = [p for p in built if surface(p) == face]
+        core = [p for p in ps if p.name.startswith("00-principles")]
+        if core and not core[0].is_file() and any(q.is_file() for q in ps):
+            print(f"\n# 警告: {face} に原則（①層）が届いていないのに、他は届いている",
+                  file=sys.stderr)
+            bad += 1
+    print(f"\n# まとめ: 要修正 {bad} 件", file=sys.stderr)
+    return 1 if bad else 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", choices=["codex", "kiro"])
+    ap.add_argument("--passphrase", help="疎通確認用の合言葉を1行入れる")
+    ap.add_argument("--verify", action="store_true",
+                    help="配り先に届いているかを見る（書かない）")
+    args = ap.parse_args()
+
+    if not PRINCIPLES.is_file():
+        sys.exit(f"正本が無い: {PRINCIPLES}")
+    if args.verify:
+        sys.exit(verify())
+    n = len(skills())
+    print(f"# 正本: {PRINCIPLES.parent}  （スキル {n} 件）", file=sys.stderr)
+
+    # Kiro は frontmatter が付くと規約が届かない。配る前に必ず検査して、
+    # 1つでも混じっていたら書かずに落ちる（人が覚えておく形にしない）。
+    built = targets(args.only, args.passphrase)
+    bad = [p.name for p, b in built.items()
+           if ".kiro" in str(p) and (b.lstrip().startswith("---")
+                                     or "\n---\nname:" in b)]
+    if bad:
+        sys.exit("Kiro へ渡す内容に frontmatter が混じっている（付くと届かない）: "
+                 + ", ".join(bad))
+
+    # **飛ばす判定は dry-run でも同じ順で行う。** 判定より前で分岐していたため、
+    # 受け口の無い環境で「7件書く」と言って本番は 7 件とも飛ばしていた（2026-10-28）。
+    done, skipped = [], []
+    for path, body in built.items():
+        if path.suffix == ".json":
+            content = body              # JSON はコメントで包めない
+        elif path.name == "AGENTS.md":
+            content = splice(path, body)
+        else:
+            content = wrap(body)
+        if not path.parent.is_dir():
+            # harness-parts は自前の置き場なので作る。面そのものが無ければ飛ばす。
+            # **受け口は作らない。** 使っていないツールの設定を生やさない
+            if path.parent.name in ("harness-parts", "agents") and path.parent.parent.is_dir():
+                if not args.dry_run:
+                    path.parent.mkdir()
+            else:
+                # **「その面は未導入」とは言わない。** 判定はファイル単位で、
+                # 同じ面の別のファイルは書かれていることがある（下で警告する）
+                skipped.append(path)
+                print(f"  [skip] {path}  （{path.parent} が無い）")
+                continue
+        done.append(path)
+        if args.dry_run:
+            print(f"  [dry-run] {path}  ({len(content)} 字)")
+            continue
+        path.write_text(content, encoding="utf-8")
+        print(f"  [write] {path}  ({len(content)} 字)")
+
+    # **同じ面に、入ったものと入らなかったものが混じっていないか。**
+    # ~/.kiro だけあって steering/ が無いと、原則もレビュー規約も届かないのに
+    # 実装スキルだけが入る。規約なしで実装が走る形が、警告なく成立していた。
+    for face in sorted({surface(p) for p in list(done) + skipped} - {None}):
+        got = [p for p in done if surface(p) == face]
+        lost = [p for p in skipped if surface(p) == face]
+        if not (got and lost):
+            continue
+        print(f"\n# 警告: {face} は一部だけ入っている（{len(got)} 入 / {len(lost)} 未）",
+              file=sys.stderr)
+        for q in lost:
+            note = "  ← 原則（①層）" if q.name.startswith("00-principles") else ""
+            print(f"#   未: {q}{note}", file=sys.stderr)
+        print(f"#   受け口は作らない方針。要るなら自分で mkdir してから流し直す:",
+              file=sys.stderr)
+        for d in sorted({str(q.parent) for q in lost}):
+            print(f"#     mkdir -p {d}", file=sys.stderr)
+
+    verb = "書ける" if args.dry_run else "書いた"
+    print(f"\n# まとめ: {verb} {len(done)} 件 / 飛ばした {len(skipped)} 件", file=sys.stderr)
+
+    # harness-parts に置いたのに、どの agent からも指されていないものを警告する。
+    #
+    # **指されていないものは、常時も随時も載らない。** 配った形跡だけが残り、
+    # 画面にも出力にも出ないので気づけない。KiroCrew のように**こちらが生成していない
+    # agent 定義**から指している場合、その定義が再生成されると静かにこの状態になる。
+    #
+    # 止めずに警告に留める。指さずに置いておく使い方（手で読ませる）もありうる。
+    if not args.dry_run and args.only in (None, "kiro"):
+        parts = HOME / ".kiro" / "harness-parts"
+        agents = HOME / ".kiro" / "agents"
+        if parts.is_dir() and agents.is_dir():
+            refs = "\n".join(f.read_text(encoding="utf-8", errors="replace")
+                              for f in agents.glob("*.json"))
+            orphan = [f.name for f in sorted(parts.glob("*.md")) if f.name not in refs]
+            if orphan:
+                print(f"\n# 警告: どの agent からも指されていない: {', '.join(orphan)}",
+                      file=sys.stderr)
+                print("#   指されていないものは載らない。次のどちらかで直す。", file=sys.stderr)
+                print("#   - KIRO_AGENTS に入れて harness-sync が agent を作る", file=sys.stderr)
+                print(f"#   - 自分で管理している agent の resources へ "
+                      f"file://~/.kiro/harness-parts/<名前> を足す", file=sys.stderr)
+
+    # 置き場所を変えたときに古い配布物が残ると、**消したはずのものが載り続ける**。
+    # 自分が生成した印（MARK_BEGIN）のあるファイルだけ、今回の対象から外れたら消す。
+    # 手書きのファイルには印が無いので触らない。
+    if not args.dry_run and args.only in (None, "kiro"):
+        stale = [
+            (HOME / ".kiro" / "steering", "*.md"),
+            (HOME / ".kiro" / "harness-parts", "*.md"),
+            # **agent 定義も片付ける。** JSON には印を書けないので、自分が作る
+            # 名前の形（harness-*.json）で見分ける。放っておくと、存在しない
+            # ファイルを指す agent が残る（2026-10-21 に実際に残った）。
+            (HOME / ".kiro" / "agents", "harness-*.json"),
+        ]
+        for d, pat in stale:
+            if not d.is_dir():
+                continue
+            for f in d.glob(pat):
+                if f in built:
+                    continue
+                if f.suffix == ".json" or MARK_BEGIN in f.read_text(
+                        encoding="utf-8", errors="replace"):
+                    f.unlink()
+                    print(f"  [remove] {f}  （配り先が変わった）")
+
+    print("\n# 届いたかの確認: python3 tests/verify-kiro-reach.py --run"
+          "\n# （合言葉を仕込んで kiro-cli に直接聞く。セッション記録の語数では測れない）", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""harness-status — いま何が引き上げ待ちかを出す。
+
+答える問いはこれ1つ。memory（まだ型になっていない観察のバッファ）のうち、
+②型 / ③装置 へ上げるべきものが溜まっていないかを、前回見た時点との差分で出す。
+
+  harness-status            前回からの差分
+  harness-status --all      差分ではなく現状の全件
+  harness-status --mark     いまの時点を「見た」として記録する（差分の基準になる）
+
+基準は local/snapshot.json（gitignore 済み）に置く。
+記録が無い初回は、差分ではなく現状を出して『--mark しろ』と言う。
+"""
+import argparse
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+STOCKTAKE = HERE / "claude-memory-stocktake"
+DEFAULT_SNAPSHOT = HERE.parent / "local" / "snapshot.json"
+
+
+def collect(dir_override=None):
+    """棚卸しの定義をそのまま借りる。ここで対象や語彙を並べ直さない。"""
+    ns = {"__name__": "_b", "__file__": str(STOCKTAKE)}
+    src = STOCKTAKE.read_text(encoding="utf-8").split("def main(")[0]
+    exec(compile(src, str(STOCKTAKE), "exec"), ns)
+    d = pathlib.Path(dir_override) if dir_override else ns["resolve_memory_dir"](None, None)
+    terms, terms_file = ns["load_terms"](None)
+    recs = [ns["analyze"](ns["parse"](p), terms)
+            for p in sorted(d.glob("*.md")) if p.name != "MEMORY.md"]
+    date = re.compile(r"202[0-9]-[01][0-9]-[0-3][0-9]")
+    return {r["name"]: {"recur": r["recur"], "strong": r["recur_strong"],
+                        "desc": r["desc"], "type": r["type"],
+                        "dated": bool(date.search(r["body"] + r["desc"]))}
+            for r in recs}, d, terms_file
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--all", action="store_true", help="差分ではなく現状の全件を出す")
+    ap.add_argument("--mark", action="store_true", help="いまの時点を基準として記録する")
+    ap.add_argument("--dir", help="memory ディレクトリ（既定: cwd から解決）")
+    ap.add_argument("--snapshot", help="基準ファイル（既定: local/snapshot.json）")
+    args = ap.parse_args()
+    snapshot = pathlib.Path(args.snapshot) if args.snapshot else DEFAULT_SNAPSHOT
+
+    cur, mem_dir, terms_file = collect(args.dir)
+    print(f"# memory: {mem_dir}  ({len(cur)} 件)", file=sys.stderr)
+    if not terms_file:
+        print("# 語彙ファイルが無いため固有語の判定はしていない", file=sys.stderr)
+    strong = [v for v in cur.values() if v["strong"]]
+    undated = [v for v in strong if not v["dated"]]
+    nod = len([v for v in cur.values() if not v["dated"]])
+    print(f"# 日付あり: {len(cur) - nod}/{len(cur)} 件"
+          + (f"   再発ありのうち日付なし: {len(undated)}/{len(strong)} 件"
+             "  ← この分は時系列から落ちる" if undated else ""),
+          file=sys.stderr)
+
+    prev = {}
+    have_base = snapshot.is_file()
+    if have_base:
+        prev = json.loads(snapshot.read_text(encoding="utf-8")).get("memories", {})
+
+    added = [n for n in cur if n not in prev]
+    grew = [n for n in cur if n in prev and cur[n]["recur"] > prev[n]["recur"]]
+    gone = [n for n in prev if n not in cur]
+
+    if not have_base or args.all:
+        if not have_base:
+            print("\n基準が無い（初回）。差分ではなく現状を出す。"
+                  "\n見終わったら `harness-status --mark` で基準を作る。")
+        rows = sorted(cur.items(), key=lambda kv: (-kv[1]["recur"], kv[0]))
+        hot = [(n, v) for n, v in rows if v["strong"]]
+        print(f"\n## ③装置の候補 — 再発が数字で書かれているもの（{len(hot)} 件）")
+        for n, v in hot:
+            print(f"  [{v['recur']}回] {n}\n           {v['desc'][:70]}")
+    else:
+        print(f"\n## 前回から増えた memory（{len(added)} 件）")
+        for n in sorted(added, key=lambda n: -cur[n]["recur"]):
+            mark = f"[{cur[n]['recur']}回] " if cur[n]["strong"] else ""
+            print(f"  {mark}{n}\n           {cur[n]['desc'][:70]}")
+        print(f"\n## 再発が増えた memory（{len(grew)} 件）— ここが引き上げの合図")
+        for n in grew:
+            print(f"  {prev[n]['recur']} → {cur[n]['recur']} 回  {n}\n           {cur[n]['desc'][:70]}")
+        if gone:
+            print(f"\n## 消えた memory（{len(gone)} 件）")
+            for n in gone:
+                print(f"  {n}")
+        if not (added or grew or gone):
+            print("\n（差分なし）")
+
+    if args.mark:
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(json.dumps({"memories": cur}, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        print(f"\n基準を記録した: {snapshot}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""at-rev — 過去の時点のコードに、今日の道具を持ち込んで走らせる。
+
+## なぜ要るか
+
+過去の時点を測るとき `git show <rev>:<path>` で**中身だけ**引くと、対象ファイルの一覧は
+今日の作業ツリーで解決される。すると **<rev> に存在したが今は無いファイルが 0 として
+数えられる**。これは数字の結論そのものを変える（実例: 純減5 → 純減28）。
+
+at-rev は <rev> の木を実体化し、そこへ今日の道具を複製して、**その木の中で**走らせる。
+走らせる前に「今日の木との存在差」を出すので、取りこぼしが起きうる量が先に見える。
+
+## 使い方
+
+  at-rev <rev> -- <command...>
+  at-rev <rev> --bring bin -- ./bin/css-migration-survey --json
+  at-rev <rev> --scope 'resources/css/**' --dry-run     # 存在差だけ見る
+"""
+import argparse
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def git(*args, cwd=None, check=True):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        sys.exit(f"git {' '.join(args)} failed:\n{r.stderr.strip()}")
+    return r.stdout
+
+
+def tracked_at(rev, cwd):
+    out = git("ls-tree", "-r", "--name-only", rev, cwd=cwd)
+    return {l for l in out.splitlines() if l}
+
+
+def matches(paths, scopes):
+    if not scopes:
+        return paths
+    return {p for p in paths if any(fnmatch.fnmatch(p, s) for s in scopes)}
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("rev")
+    ap.add_argument("--bring", action="append", default=[],
+                    help="今日の木から <rev> の木へ複製するパス（道具）。繰り返し可")
+    ap.add_argument("--scope", action="append", default=[],
+                    help="存在差を報告する範囲のglob。繰り返し可")
+    ap.add_argument("--base", default="HEAD", help="「今日」として比べる ref（既定 HEAD）")
+    ap.add_argument("--dry-run", action="store_true", help="存在差だけ出して実行しない")
+    ap.add_argument("--keep", action="store_true", help="作業ツリーを消さずに残す")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("-h", "--help", action="help")
+    args, rest = ap.parse_known_args()
+    cmd = rest[1:] if rest and rest[0] == "--" else rest
+
+    repo = git("rev-parse", "--show-toplevel").strip()
+    rev_sha = git("rev-parse", args.rev).strip()
+    base_sha = git("rev-parse", args.base).strip()
+
+    at_rev = tracked_at(rev_sha, repo)
+    at_base = tracked_at(base_sha, repo)
+    gone = sorted(matches(at_rev - at_base, args.scope))      # revにあって今は無い = 0と数えられる分
+    added = sorted(matches(at_base - at_rev, args.scope))     # 今はあるがrevには無い = 混入する分
+
+    report = {
+        "rev": rev_sha[:12], "base": base_sha[:12], "scope": args.scope,
+        "gone_count": len(gone), "added_count": len(added),
+        "gone": gone, "added": added,
+    }
+
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr)
+    else:
+        print(f"# at-rev {rev_sha[:12]}  (今日 = {base_sha[:12]})", file=sys.stderr)
+        sc = " ".join(args.scope) if args.scope else "(全体)"
+        print(f"# 範囲: {sc}", file=sys.stderr)
+        print(f"# rev にあって今は無い : {len(gone)} 件  ← git show 方式なら 0 として数えられる分",
+              file=sys.stderr)
+        for p in gone[:20]:
+            print(f"#   - {p}", file=sys.stderr)
+        if len(gone) > 20:
+            print(f"#   ... 他 {len(gone) - 20} 件", file=sys.stderr)
+        print(f"# 今はあって rev に無い : {len(added)} 件  ← 今日の木で一覧を作ると混入する分",
+              file=sys.stderr)
+
+    if args.dry_run or not cmd:
+        if not cmd and not args.dry_run:
+            print("# 実行するコマンドが無いので存在差だけ出した（-- の後ろに書く）", file=sys.stderr)
+        return 0
+
+    wt = tempfile.mkdtemp(prefix="at-rev-", dir=os.environ.get("TMPDIR") or "/tmp")
+    wt = os.path.join(wt, "tree")
+    git("worktree", "add", "--detach", "--quiet", wt, rev_sha, cwd=repo)
+    try:
+        for b in args.bring:
+            src = os.path.join(repo, b)
+            if not os.path.exists(src):
+                sys.exit(f"--bring のパスが今日の木に無い: {b}")
+            dst = os.path.join(wt, b)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+            print(f"# bring: {b}", file=sys.stderr)
+        print(f"# run  : {' '.join(cmd)}   (cwd={wt})", file=sys.stderr)
+        return subprocess.run(cmd, cwd=wt).returncode
+    finally:
+        if args.keep:
+            print(f"# 残した: {wt}  （git worktree remove --force {wt} で消す）", file=sys.stderr)
+        else:
+            git("worktree", "remove", "--force", wt, cwd=repo, check=False)
+            shutil.rmtree(os.path.dirname(wt), ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

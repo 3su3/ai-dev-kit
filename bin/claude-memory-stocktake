@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""auto-memory を機械で棚卸しして、①原則 / ②型 / ③装置 のどこへ振るかの材料を出す。
+
+出す列はすべて「ファイルから数えられる事実」だけ。昇格先そのものは決めない。
+近似の列（発火形）には approx を付けてある。根拠の強さが違うものを混ぜて数えないこと。
+
+使い方:
+  claude-memory-stocktake                     # 既定のmemoryディレクトリを棚卸し（TSV）
+  claude-memory-stocktake --md                # Markdown表
+  claude-memory-stocktake --dir PATH
+  claude-memory-stocktake --sort recur --md   # 再発回数の多い順
+  claude-memory-stocktake --why NAME          # 1件について、どの列が何にマッチしたかを全部出す
+"""
+import argparse
+import os
+import pathlib
+import re
+import subprocess
+import sys
+from collections import Counter
+
+# --- 検出パターン ----------------------------------------------------------
+# 再発: 「4回やった」「3回続けて外した」「また」「再発」。本文+descriptionから拾う。
+RECUR_PATTERNS = [
+    re.compile(r"(\d+)\s*回(?:続けて)?(?:やった|外した|同じ|やらかした|繰り返)"),
+    re.compile(r"(\d+)\s*回(?:目|やって)"),
+    re.compile(r"同じ(?:指摘|誤り|型|ミス)を\s*(\d+)\s*(?:回|度)"),
+]
+RECUR_WEAK = re.compile(r"(またやった|再発|同じ型|毎回|何度も)")
+
+# 発火形(approx): 「〜とき」「〜前に」「〜したら」「〜する際」で場面が書かれているか。
+# これは②(skill)のdescriptionに書ける形かの近似であって、発火条件の妥当性は判定しない。
+TRIGGER_APPROX = re.compile(r"(とき|ときは|前に|したら|する際|場合|出す前|書く前|言う前)")
+
+# プロジェクト固有語: 普遍的な手法か、特定プロジェクトの運用知識かを切り分ける。
+# 語彙は**リポジトリに持たない**。`terms/<slug>.txt`（1行1語、`#` はコメント）に置く。
+# terms/ は .gitignore 済みで、社内用語が公開リポジトリへ出ない。雛形は terms/example.txt。
+def load_terms(explicit=None):
+    """(語彙, 読んだファイル) を返す。見つからなければ ([], None)。"""
+    def read(c):
+        terms = [l.strip() for l in c.read_text(encoding="utf-8").splitlines()]
+        return [t for t in terms if t and not t.startswith("#")], c
+
+    # 明示指定（引数・環境変数）が外れていたら落ちる。黙って別の語彙へ降りない。
+    for src, val in (("--terms", explicit), ("$HARNESS_TERMS", os.environ.get("HARNESS_TERMS"))):
+        if val:
+            c = pathlib.Path(val)
+            if not c.is_file():
+                sys.exit(f"{src} に指定された語彙ファイルが無い: {c}")
+            return read(c)
+    # 暗黙の既定だけは、無ければ「語彙なし」で続ける（その旨は集計行に出る）
+    if SLUG_HINT:
+        c = pathlib.Path(__file__).resolve().parent.parent / "terms" / (SLUG_HINT[0] + ".txt")
+        if c.is_file():
+            return read(c)
+    return [], None
+
+
+LINK = re.compile(r"\[\[([^\]]+)\]\]")
+PROJECTS = pathlib.Path.home() / ".claude/projects"
+SLUG_HINT = []          # 解決できた slug を load_terms へ渡すための置き場
+
+
+def slug_for(path):
+    """Claude Code のプロジェクト slug。英数字以外をすべて `-` に置換する。"""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(pathlib.Path(path).resolve()))
+
+
+def with_memory():
+    """memory を持つプロジェクトを (slug, Path) で列挙する。"""
+    return sorted((d.name, d / "memory") for d in PROJECTS.glob("*") if (d / "memory").is_dir())
+
+
+def resolve_memory_dir(explicit, project):
+    """明示 > 環境変数 > cwd の slug > git のトップ階層の slug。
+    どれも当たらなければ**黙って別物を選ばず**、候補を出して落とす。"""
+    if explicit:
+        return pathlib.Path(explicit)
+    if os.environ.get("CLAUDE_MEMORY_DIR"):
+        return pathlib.Path(os.environ["CLAUDE_MEMORY_DIR"])
+    tries = [project or os.getcwd()]
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True).stdout.strip()
+    if top:
+        tries.append(top)
+    for t in tries:
+        d = PROJECTS / slug_for(t) / "memory"
+        if d.is_dir():
+            SLUG_HINT.append(slug_for(t))
+            return d
+    found = with_memory()
+    msg = ["memory ディレクトリを特定できない。",
+           f"  試した場所: {', '.join(str(PROJECTS / slug_for(t) / 'memory') for t in tries)}"]
+    if found:
+        msg.append("  memory を持つプロジェクト:")
+        msg += [f"    --dir {p}   ({len(list(p.glob('*.md')))} 件)" for _, p in found]
+    else:
+        msg.append("  このマシンに memory を持つプロジェクトが無い。")
+    sys.exit("\n".join(msg))
+
+
+def parse(path):
+    text = path.read_text(encoding="utf-8")
+    fm, _, body = text.partition("\n---\n")[0], None, text
+    if text.startswith("---"):
+        end = text.find("\n---\n", 3)
+        fm, body = text[3:end], text[end + 5:]
+    name = re.search(r"^name:\s*(.+)$", fm, re.M)
+    desc = re.search(r"^description:\s*(.+)$", fm, re.M)
+    mtype = re.search(r"^\s*type:\s*(.+)$", fm, re.M)
+    return {
+        "file": path.name,
+        "name": (name.group(1).strip() if name else path.stem),
+        "desc": (desc.group(1).strip() if desc else ""),
+        "type": (mtype.group(1).strip() if mtype else ""),
+        "body": body,
+        "lines": len([l for l in body.splitlines() if l.strip()]),
+    }
+
+
+def analyze(rec, project_terms):
+    hay = rec["desc"] + "\n" + rec["body"]
+    counts, hits = [], []
+    for pat in RECUR_PATTERNS:
+        for m in pat.finditer(hay):
+            counts.append(int(m.group(1)))
+            hits.append(m.group(0))
+    weak = RECUR_WEAK.findall(hay)
+    rec["recur"] = max(counts) if counts else (1 if weak else 0)
+    rec["recur_strong"] = bool(counts)          # 数字で書いてある = 強い根拠
+    rec["recur_hits"] = hits + weak
+    rec["trigger_approx"] = bool(TRIGGER_APPROX.search(rec["desc"]))
+    terms = sorted({t for t in project_terms if t in hay})
+    rec["project_terms"] = terms
+    rec["out_links"] = sorted(set(LINK.findall(rec["body"])))
+    return rec
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", help="memory ディレクトリ（省略時は cwd / git トップから解決）")
+    ap.add_argument("--project", help="slug を引くプロジェクトのパス（既定: cwd）")
+    ap.add_argument("--terms", help="プロジェクト固有語のファイル（既定: terms/<slug>.txt）")
+    ap.add_argument("--md", action="store_true")
+    ap.add_argument("--sort", default="recur", choices=["recur", "inlinks", "name", "lines"])
+    ap.add_argument("--why", metavar="NAME")
+    args = ap.parse_args()
+
+    d = resolve_memory_dir(args.dir, args.project)
+    if not d.is_dir():
+        sys.exit(f"not a directory: {d}")
+    terms_list, terms_file = load_terms(args.terms)
+    files = sorted(p for p in d.glob("*.md") if p.name != "MEMORY.md")
+    recs = [analyze(parse(p), terms_list) for p in files]
+
+    inlinks = Counter()
+    for r in recs:
+        for t in r["out_links"]:
+            inlinks[t] += 1
+    for r in recs:
+        r["inlinks"] = inlinks[r["name"]]
+
+    if args.why:
+        for r in recs:
+            if args.why in (r["name"], r["file"], r["file"].removesuffix(".md")):
+                print(f"name        : {r['name']}")
+                print(f"type        : {r['type']}")
+                print(f"description : {r['desc']}")
+                print(f"再発         : {r['recur']}  (強い根拠={r['recur_strong']})")
+                print(f"  一致      : {r['recur_hits'] or '—'}")
+                print(f"発火形(approx): {r['trigger_approx']}  ← descriptionに場面語があるかだけ。妥当性は見ていない")
+                print(f"固有語       : {r['project_terms'] or '—'}")
+                print(f"被リンク     : {r['inlinks']}   出リンク: {r['out_links'] or '—'}")
+                print(f"本文行数     : {r['lines']}")
+                return
+        sys.exit(f"見つからない: {args.why}")
+
+    keys = {
+        "recur": lambda r: (-r["recur"], -r["recur_strong"], -r["inlinks"], r["name"]),
+        "inlinks": lambda r: (-r["inlinks"], r["name"]),
+        "name": lambda r: r["name"],
+        "lines": lambda r: (-r["lines"], r["name"]),
+    }
+    recs.sort(key=keys[args.sort])
+
+    cols = ["name", "type", "再発", "強", "発火形~", "固有語", "被link", "行"]
+    rows = [[
+        r["name"], r["type"], str(r["recur"]), "o" if r["recur_strong"] else "",
+        "o" if r["trigger_approx"] else "", str(len(r["project_terms"])),
+        str(r["inlinks"]), str(r["lines"]),
+    ] for r in recs]
+
+    if args.md:
+        print("| " + " | ".join(cols) + " |")
+        print("|" + "|".join(["---"] * len(cols)) + "|")
+        for row in rows:
+            print("| " + " | ".join(row) + " |")
+    else:
+        print("\t".join(cols))
+        for row in rows:
+            print("\t".join(row))
+
+    n = len(recs)
+    strong = [r for r in recs if r["recur_strong"]]
+    weak = [r for r in recs if r["recur"] and not r["recur_strong"]]
+    universal = [r for r in recs if not r["project_terms"]]
+    print(f"\n# 総数 {n}", file=sys.stderr)
+    print(f"# 再発が数字で書いてある(強い根拠) : {len(strong)}", file=sys.stderr)
+    print(f"# 再発らしき語のみ(弱い根拠・別勘定): {len(weak)}", file=sys.stderr)
+    if terms_file:
+        print(f"# 固有語ゼロ(普遍的な手法の候補)   : {len(universal)}"
+              f"   [語彙 {len(terms_list)} 語 / {terms_file}]", file=sys.stderr)
+    else:
+        print("# 固有語: **語彙ファイルが無いため判定していない**（全件 0 と出る）。"
+              f"terms/<slug>.txt を置くか --terms で指定する。雛形: terms/example.txt", file=sys.stderr)
+    print(f"# type別: {dict(Counter(r['type'] for r in recs))}", file=sys.stderr)
+    print("# 「発火形~」は description に場面語があるかの近似。②へ振れるかの判断そのものではない。", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,49 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # verify-at-rev が履歴を見る。浅いクローンだと成立しない
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # **一覧を手で持たない。** tests/ にあるものを全部流す。
+      # 足した検査が CI から漏れる事故を防ぐ（README の一覧で実際に2回やった）。
+      - name: 検査を全部流す
+        run: |
+          set -u
+          fail=0
+          found=0
+          for t in tests/verify-* tests/probe-*; do
+            [ -f "$t" ] || continue
+            found=$((found + 1))
+            printf '::group::%s\n' "$t"
+            if python3 "$t"; then
+              printf '::endgroup::\n'
+            else
+              printf '::endgroup::\n'
+              printf '::error file=%s::%s が失敗\n' "$t" "$t"
+              fail=$((fail + 1))
+            fi
+          done
+          # **1本も見つからなければ失敗させる。** 0 件を「全部通った」にしない
+          if [ "$found" -eq 0 ]; then
+            echo '::error::検査が1本も見つからない。パスの指定が壊れている'
+            exit 1
+          fi
+          echo "検査 $found 本中 $fail 本が失敗"
+          [ "$fail" -eq 0 ]
