@@ -147,6 +147,30 @@ def main():
         check(f"出どころを構造で拾える: {sample[:16]!r}",
               bool(voc.summary_source_pattern().search(sample)))
 
+    print("\n## nit は既定で投稿しない")
+    # **対応されない指摘は、相手の注意を取るだけになる。**
+    # 業務リポジトリのマージ済み PR 33 件で、nit は 13 件中 1 件しか
+    # 直っていなかった（2026-10-29 に bin/review-outcomes で測定）。
+    check("接頭辞の表に「既定では投稿しない」がある",
+          "既定では投稿しない" in skill_body)
+    check("候補には出すと書いてある", "候補には出す" in skill_body)
+    check("詳細側に測定の根拠がある", "13" in sel and "直った" in sel)
+    # **予測器を作らない。** 件数が足りないまま条件にすると当てにならない網になる
+    check("予測器を作らないと書いてある", "予測器は作っていない" in sel)
+    # 自分で「問題ない」と結論している指摘は、指摘ではない
+    check("自分で問題なしと言う指摘を出さない", "観察の共有" in sel)
+
+    print("\n## 測る道具がある")
+    tool = Path(__file__).resolve().parent.parent / "bin" / "review-outcomes"
+    check("bin/review-outcomes がある", tool.is_file())
+    if tool.is_file():
+        t = tool.read_text(encoding="utf-8")
+        check("語彙を正本から取っている", "from vocabulary import" in t)
+        check("未マージを除くと書いてある", "未マージの PR は除く" in t)
+        # **0 件を「問題なし」にしない**
+        check("0 件で失敗させる", "0 件を「問題なし」として扱わない" in t)
+        check("限界を出力に書いている", "実際の割合はこれより高い" in t)
+
     print("\n## クロスの相手をサブエージェントと取り違えない")
     # **相手は別プロセスの CLI。** 実使用で、Claude が「サブエージェントの起動が
     # 既定で止めてある」を理由にクロスを辞退した（2026-10-28）。禁じられているのは

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""自分のレビュー指摘が、**直ったか流れたか**を数える。
+
+**対応されない指摘は、相手の注意を取るだけになる。**
+どの接頭辞が実際に効いているかを、出した側が自分で測るための道具。
+
+    bin/review-outcomes <owner/repo> <レビュアーの login> [--prs 40]
+
+**分かることと、分からないこと。**
+
+- 「直った」は**返信にコミット参照があるか**だけで数える。
+  **SHA を書かずに直した分は見えない。実際の割合はこれより高い。**
+- **未マージの PR は除く。** まだ返していないだけのものを「流れた」と数えない。
+- 接頭辞の表記ゆれ（`[issue]` と `issue:`）は吸収する。
+  **一致の語彙は kit の正本から取る**（`tests/vocabulary.py`）。
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+try:
+    from vocabulary import prefix_pattern
+except ImportError:
+    sys.exit("tests/vocabulary.py が読めない。kit の中から実行する")
+
+SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
+THREADS = """query($o:String!,$r:String!,$n:Int!){ repository(owner:$o,name:$r){
+  pullRequest(number:$n){ state reviewThreads(first:50){ nodes{
+    comments(first:8){ nodes{ author{login} body } } } } } } }"""
+
+
+def gh(args):
+    r = subprocess.run(["gh"] + args, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"gh が失敗: {' '.join(args[:3])}\n  {r.stderr.strip()[:300]}")
+    return json.loads(r.stdout)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("repo", help="owner/repo")
+    ap.add_argument("login", help="レビュアーの GitHub login")
+    ap.add_argument("--prs", type=int, default=40, help="さかのぼる PR 数")
+    a = ap.parse_args()
+    owner, _, name = a.repo.partition("/")
+    if not name:
+        sys.exit("owner/repo の形で渡す")
+
+    found = gh(["api", "-X", "GET", "search/issues",
+                "-f", f"q=repo:{a.repo} is:pr reviewed-by:{a.login} -author:{a.login}",
+                "-f", f"per_page={a.prs}", "-f", "sort=updated"])["items"]
+    if not found:
+        sys.exit(f"{a.login} がレビューした PR が見つからない。login と repo を確かめる")
+
+    pat, rows, skipped = prefix_pattern(strict=False), [], 0
+    for pr in found:
+        d = gh(["api", "graphql", "-f", f"query={THREADS}",
+                "-F", f"o={owner}", "-F", f"r={name}", "-F", f"n={pr['number']}"
+                ])["data"]["repository"]["pullRequest"]
+        if d["state"] != "MERGED":
+            skipped += 1
+            continue
+        for th in d["reviewThreads"]["nodes"]:
+            cs = th["comments"]["nodes"]
+            if not cs or cs[0]["author"]["login"] != a.login:
+                continue
+            m = pat.search(cs[0]["body"][:200])
+            if not m:
+                continue
+            rep = [c for c in cs[1:] if c["author"]["login"] != a.login]
+            txt = " ".join(c["body"] for c in rep)
+            rows.append((next(g for g in m.groups() if g), bool(rep), bool(SHA.search(txt))))
+
+    if not rows:
+        sys.exit(f"接頭辞つきの指摘が1件も無い（PR {len(found)} 件を見た）。"
+                 "\n  **0 件を「問題なし」として扱わない。** 接頭辞の形か login を確かめる")
+
+    print(f"# {a.repo} / {a.login}  （PR {len(found)} 件、うち未マージ {skipped} 件を除外）\n")
+    print("  接頭辞        件数  返信あり  直った  直った率")
+    for k, _ in Counter(r[0] for r in rows).most_common():
+        s = [r for r in rows if r[0] == k]
+        fixed = sum(r[2] for r in s)
+        print(f"  {k:<12} {len(s):>4}   {sum(r[1] for r in s):>5}  {fixed:>5}   "
+              f"{fixed / len(s):>6.0%}" + ("  ← n が小さい" if len(s) < 10 else ""))
+    print(f"\n  合計 {len(rows)} 件")
+    print("\n  **「直った」はコミット参照の有無だけで数えている。**"
+          "\n  SHA を書かずに直した分は見えないので、実際の割合はこれより高い。"
+          "\n  **この数字から「どの指摘なら直るか」の条件を作らない。**"
+          " 件数が足りないまま条件にすると、当てにならない網ができる。")
+
+
+if __name__ == "__main__":
+    main()
