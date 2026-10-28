@@ -14,26 +14,23 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# **職場・取引先に紐づく語。** 公開リポジトリに入ってはいけない。
-WORK = ("carmo", "volareinc", "redmine" + r"\.system", "kintone", "nyle")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vocabulary import confidential_pattern   # noqa: E402
 
-# **判断を避けた語。** 2026-10-28 に、この語を含む文書を畳んで 0 件にした。
-# 名前自体は本人の個人リポジトリで機密ではないが、**公開してよいかの判断は
-# していない**ので、戻ってきたら止める。
-UNDECIDED = ("[Ww]aymark",)
-
-# この検査自身は、語の一覧を持っているので対象から外す。
-# **穴ではあるが見える穴。** ここへ秘密を書けば素通りする。
-SELF = "tests/verify-confidential.py"
+# **語の一覧は tests/vocabulary.py が持つ。** ここで打ち直さない。
+# 打ち直した結果、1語入れ忘れて「要注意語なし」と誤報告した（2026-10-28）。
+# **語の一覧を持つファイルは対象から外す。** 穴ではあるが見える穴。
+# 履歴も見るので、**過去に一覧を持っていたファイル**も外す必要がある。
+EXCLUDE = ("tests/vocabulary.py", "tests/verify-confidential.py")
 
 
 def main():
     files = subprocess.run(["git", "ls-files"], cwd=REPO, check=True,
                            capture_output=True, text=True).stdout.split()
-    pat = re.compile("|".join(WORK + UNDECIDED))
+    pat = confidential_pattern()
     hits = []
     for rel in files:
-        if rel == SELF:
+        if rel in EXCLUDE:
             continue
         p = REPO / rel
         if not p.is_file():
@@ -48,7 +45,7 @@ def main():
 
     if not files:
         sys.exit("git ls-files が空。検査が成立しない")
-    print(f"  追跡ファイル {len(files)} 件を見た（{SELF} を除く）")
+    print(f"  追跡ファイル {len(files)} 件を見た（{', '.join(EXCLUDE)} を除く）")
 
     # **履歴も見る。** 公開すると過去のコミットも全部読める。
     # 2026-10-28、作業ツリーだけを見ていて、履歴に職場の語が
@@ -61,7 +58,7 @@ def main():
     for i in range(0, len(revs), 200):          # 引数の長さ制限を避ける
         r = subprocess.run(
             ["git", "grep", "-I", "-n", "-E", pat.pattern, *revs[i:i + 200],
-             "--", f":(exclude){SELF}"],
+             "--", *[f":(exclude){e}" for e in EXCLUDE]],
             cwd=REPO, capture_output=True, text=True)
         hist += [ln for ln in r.stdout.splitlines() if ln.strip()]
     print(f"  コミット {len(revs)} 件の履歴を見た")

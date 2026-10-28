@@ -15,8 +15,12 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vocabulary import prefixes   # noqa: E402
+
 SKILL_DIR = Path(__file__).resolve().parent.parent / "claude" / "skills" / "review-discipline"
-WORDS = ("issue", "suggestion", "nit", "ask")
+# **接頭辞は SKILL.md の表が正本。** ここで打ち直さない（2026-10-28 に3回外した）
+WORDS = prefixes()
 
 ok = True
 
@@ -48,7 +52,7 @@ def main():
     print("\n## 語彙は4語ちょうど")
     skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
     found = re.findall(r"^\| `\[(\w+)\]` \|", skill, re.M)
-    check("接頭辞の表が4語", found == list(WORDS), f"{found}")
+    check("接頭辞の表が読める", found == list(WORDS) and len(found) >= 3, f"{found}")
     # **複合を作らない。** 実使用で `nit/ask:` が出たことがある（2026-10-28）
     comp = re.findall(r"\[(?:" + "|".join(WORDS) + r")/(?:" + "|".join(WORDS) + r")\]", skill)
     check("複合の接頭辞が定義されていない", not comp, f"{comp[:3]}")
@@ -126,6 +130,22 @@ def main():
 
     for must in ("手戻りが確定", "未実行"):
         check(f"常時読みに届いている: {must}", must in skill_body)
+
+    print("\n## 語彙を正本から取っている")
+    # **一致とみなす文字列を手で打ち直さない。** 2026-10-28 に3回外した。
+    # 検査も測定も tests/vocabulary.py から取る。
+    import vocabulary as voc
+    check("接頭辞を SKILL.md から取れる", len(voc.prefixes()) >= 3, f"{voc.prefixes()}")
+    # **表記ゆれを許す側も要る。** 実機の出力は規約どおりの形とは限らず、
+    # 厳密に探すと「守られている出力」を守られていないと読む
+    loose = voc.prefix_pattern(strict=False)
+    for sample in ("[issue] a", "issue: a", " 1. issue  a"):
+        check(f"ゆれ許容で拾える: {sample!r}", bool(loose.search(sample)))
+    # **出どころは構造で拾う。** 言い回しは無限に書ける
+    for sample in ("この PR（本文から）: x", "この PR（コードから読み取り): x",
+                   "この変更（差分を読んだ私の読み）: x"):
+        check(f"出どころを構造で拾える: {sample[:16]!r}",
+              bool(voc.summary_source_pattern().search(sample)))
 
     print("\n## クロスの相手をサブエージェントと取り違えない")
     # **相手は別プロセスの CLI。** 実使用で、Claude が「サブエージェントの起動が

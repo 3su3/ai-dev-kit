@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""計画の「修正対象」と、実際の差分を**集合で**突き合わせる。
+
+**記憶から「計画との差: なし」と書かせないための道具。**
+実装したエージェントは計画の方を覚えているので、ずれたときほど
+「計画どおりにやったつもり」で書く。読む人が一番見たいものが落ちる。
+
+    bin/plan-vs-diff <計画のパス> [--base origin/main]
+
+終了コード: 差があれば 1。無ければ 0。
+"""
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+def changed(base):
+    r = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"git diff が失敗した（base={base}）: {r.stderr.strip()[:200]}")
+    return {x for x in r.stdout.split() if x}
+
+
+def planned(path):
+    """計画の「修正対象」の節から、パスらしい行を拾う。"""
+    body = Path(path).read_text(encoding="utf-8")
+    m = re.search(r"^#{1,3}\s*\d*\.?\s*修正対象\s*$", body, re.M)
+    if not m:
+        sys.exit(f"「修正対象」の見出しが無い: {path}\n"
+                 "  見出しが違う形なら、計画側を直すかこの道具を直す。"
+                 "**目で数えて済ませない。**")
+    rest = body[m.end():]
+    nxt = re.search(r"^#{1,3}\s", rest, re.M)
+    sec = rest[:nxt.start()] if nxt else rest
+    # バッククォート内・箇条書きの、拡張子を持つパスらしいもの
+    found = set(re.findall(r"[`\s(]([\w./-]+\.\w{1,6})[`\s),]", sec + " "))
+    return {f for f in found if "/" in f or f.count(".") == 1}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("plan")
+    ap.add_argument("--base", default="origin/main")
+    a = ap.parse_args()
+
+    # **未コミットの変更は差分に出ない。** 気づかないと、実装済みのものが
+    # 「計画にあって未実装」として並び、**逆向きの偽の警告**になる。
+    dirty = subprocess.run(["git", "status", "--porcelain"],
+                           capture_output=True, text=True).stdout.split("\n")
+    dirty = [x for x in dirty if x.strip()]
+    if dirty:
+        print(f"!! 未コミットの変更が {len(dirty)} 件ある。**この出力には含まれない。**",
+              file=sys.stderr)
+        print("   先にコミットしてから回す。", file=sys.stderr)
+
+    want, got = planned(a.plan), changed(a.base)
+    if not want:
+        sys.exit("計画から1件も拾えなかった。**0 件を「差なし」として扱わない。**"
+                 "\n  見出しの下にパスが書かれているか確認する")
+
+    missing = sorted(want - got)      # 計画にあって未実装
+    extra = sorted(got - want)        # 計画に無い変更
+
+    print(f"# 計画 {len(want)} 件 / 差分 {len(got)} 件  （base={a.base}）")
+    print(f"\n計画にあって未実装 {len(missing)} 件")
+    for f in missing:
+        print(f"  - {f}")
+    print(f"\n計画に無い変更 {len(extra)} 件")
+    for f in extra:
+        print(f"  + {f}  ← 理由を1行で書く")
+    if not missing and not extra:
+        print("\n一致。**この出力を根拠として報告に書く。**")
+    else:
+        print("\n**「計画との差: なし」と書かない。** 上の件数と理由を書く。")
+    return 1 if (missing or extra) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
