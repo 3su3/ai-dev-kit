@@ -124,11 +124,11 @@ def main():
         # （2026-10-28 に書いた。件数も見ているのでそこで止まった）
         return [m.group(1) for m in re.finditer(pat, text, re.M)]
     # **6つの節だけを見る。** 出し方の 1./2. を拾うと数が合わなくなる
-    sec = rd.split("出すのはこの6つだけ", 1)[-1].split("```", 1)[0]
+    sec = rd.split("出すのはこの5つだけ", 1)[-1].split("```", 1)[0]
     inline = items(sec, r"^\d\. \*\*(.+?)\*\*")
     sel = (SKILLS / "review-discipline" / "selection.md").read_text(encoding="utf-8")
     table = items(sel, r"^\| \d \| \*\*(.+?)\*\*")
-    check("steering の6項目 = selection.md の6項目", inline == table and len(table) == 6,
+    check("steering の5項目 = selection.md の5項目", inline == table and len(table) == 5,
           f"steering={inline} / selection.md={table}")
 
     print("\n## 2. 頼んだときだけのものは harness-parts と agent 定義にある")
