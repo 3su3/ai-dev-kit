@@ -1,6 +1,6 @@
 # 実装計画: Acceptance の検証責任を dev-flow に加える
 
-> **状態: Human Plan Review・実装承認待ち** — 導入元の開発フローで得た知見に基づく。実装は承認後に同じ Draft PR で行う。
+> **状態: Human Plan Review・実装承認待ち** — PR #9 で共有中。導入元の開発フローで得た知見に基づく。実装は承認後に同じ Draft PR で行う。
 
 # 1. 概要
 
