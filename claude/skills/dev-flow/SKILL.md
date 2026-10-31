@@ -34,6 +34,7 @@ gh pr view --json body,files                             # PR に計画が乗っ
 
 1. **調査** — `leader.md` の調査チェックリストに沿う。調査不足のまま計画を書かない
 2. **リスク分類と計画** — `risk-policy.md` に従って変更を分類する。通常・高リスクは `plan-template.md` の項目に沿って、対象リポジトリが指定する保存先・命名で残す。軽微な変更はリポジトリの規則が許す場合のみ、Issue等の永続的な短い記録で代替できる
+   Acceptance の検証責任も `risk-policy.md` の手順で整理する。
 3. **Plan レビューと承認確認** — `plan-review.md` に従い、Human レビューまたは AI レビューを経て、対象リポジトリが要求する Human の実装承認を確認する。必要な承認がない場合は**手を止める**。AI の LGTM やリスク分類だけで承認を省略しない
 4. **実装** — `implementer.md` に従う。重要な振る舞いには**TDD（Red → Green → Refactor）**を適用する
 5. **レビュー** — `review-discipline` スキルに従い、**別セッションで**行う

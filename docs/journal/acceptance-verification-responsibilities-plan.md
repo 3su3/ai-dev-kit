@@ -1,6 +1,6 @@
 # 実装計画: Acceptance の検証責任を dev-flow に加える
 
-> **状態: Human Plan Review・実装承認待ち** — PR #9 で共有中。導入元の開発フローで得た知見に基づく。実装は承認後に同じ Draft PR で行う。
+> **状態: 実装済み・実装レビュー待ち** — PR #9 の[Human実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544503281)を受け、同じ Draft PR で実装した。mergeは未承認。
 
 # 1. 概要
 
@@ -181,25 +181,25 @@ ai-dev-kit の Draft PR で Human Plan Review を受ける。対象版は Plan �
 
 # 10. 承認
 
-この Plan の版識別子は Draft PR 作成後に permalink で示す。Human の明示的な実装承認は同 PR Conversation で確認する。現時点では未承認。
+承認対象は [Plan revision c135f4f](https://github.com/3su3/ai-dev-kit/blob/c135f4f737e7951602a254270ed12f69fbdde1ed/docs/journal/acceptance-verification-responsibilities-plan.md)。Human の明示的な実装承認は [PR #9 の記録](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544503281)で確認した。実装レビューとmerge判断は別に必要。
 
 ## ビジネスレビュー
 
 - [ ] 承認
 
-コメント: Human の判断待ち。
+コメント: Human のPlan・実装承認は上記PR記録を参照。区分別の判定は記録されていない。
 
 ## エンジニアレビュー
 
 - [ ] 承認
 
-コメント: Human の判断待ち。
+コメント: Human のPlan・実装承認は上記PR記録を参照。区分別の判定は記録されていない。
 
 # 11. 完了条件
 
-- [ ] 現在の Plan 版への Human 実装承認を確認した。
-- [ ] 承認範囲で既存 `dev-flow` を拡張した。
-- [ ] 変更内容に適した静的検査と負例、適用可能な既存検査を実施した。
-- [ ] 使い捨て環境のエージェント挙動を実測し、未実施項目を区別して記録した。
+- [x] 現在の Plan 版への Human 実装承認を確認した。
+- [x] 承認範囲で既存 `dev-flow` を拡張した。
+- [x] 変更内容に適した静的検査と負例、適用可能な既存検査を実施した。
+- [x] 使い捨て環境のエージェント挙動を実測し、未実施項目を区別して記録した。
 - [ ] 実装レビューと Human の判断を経て Plan 状態を更新した。
 - [ ] 導入元の追跡記録に PR / 結果へのリンクを残した。
