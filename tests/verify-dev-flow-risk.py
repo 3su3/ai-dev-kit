@@ -80,9 +80,51 @@ def validate(docs):
     if "ai-dev-kit" in principles:
         errors.append("principles references this repo's own contribution rules")
 
-    # **順序そのものを普遍として書いていないこと。** 流儀は local/preferences.md へ
-    if "レビューを経てから" in docs["SKILL.md"] or "5 が通ってから" in docs["SKILL.md"]:
-        errors.append("SKILL.md hardcodes one team's ordering as universal")
+    # 共通の旧順序は未指定時のフォールバック。導入先の明示指定は優先する。
+    order_match = re.search(r"^## 検証順序の共通デフォルト\n(.*?)(?=^## |\Z)",
+                            docs["SKILL.md"], re.M | re.S)
+    if not order_match:
+        errors.append("SKILL.md lacks the common order fallback")
+    else:
+        order = order_match.group(1)
+        stages = re.findall(r"^\| [1-4] \| ([^|]+) \|", order, re.M)
+        if stages != ["テスト・Lint・静的解析", "セルフレビュー",
+                      "AI/Humanレビュー", "必要な実機確認"]:
+            errors.append(f"common fallback stages changed: {stages}")
+        for phrase in ("順序を明示する場合は、そちらを優先する",
+                       "順序の明示指定がない場合は、次の順序",
+                       "Planテンプレートを使わない軽微な変更でも",
+                       "Phase 0", "通過条件",
+                       "無効化には理由と代替順序",
+                       "無効化だけで代替順序が不明",
+                       "Humanに確認", "承認を省略しない"):
+            if phrase not in order:
+                errors.append(f"common fallback missing: {phrase}")
+    if "`SKILL.md` の「検証順序の共通デフォルト」" not in docs["plan-template.md"]:
+        errors.append("plan template does not link the effective fallback")
+    if "`SKILL.md` の「検証順序の共通デフォルト」" not in docs["risk-policy.md"]:
+        errors.append("risk policy does not link the effective fallback")
+    policy = docs["risk-policy.md"]
+    if "## Acceptance の検証責任" not in policy:
+        errors.append("policy lacks Acceptance responsibility procedure")
+    for phrase in ("確認内容・担当・方法", "required / not applicable とその理由",
+                   "機械的に判定", "体験・意味・設計判断", "環境に依存する確認",
+                   "Human専属と決めつけない", "理由なく重複させない",
+                   "Product semantics", "軽微な変更", "通常の文書差分確認だけで",
+                   "通常のテスト環境を用意するだけで"):
+        if phrase not in policy:
+            errors.append(f"Acceptance procedure missing: {phrase}")
+    for name in ("SKILL.md", "workflow.md", "plan-template.md"):
+        if "Acceptance の検証責任" not in docs[name]:
+            errors.append(f"{name} does not link Acceptance procedure")
+    if "| Acceptance | 確認内容 | 担当 | 方法 | 適用状態と理由 |" not in docs["plan-template.md"]:
+        errors.append("plan template lacks per-Acceptance responsibility record")
+    if "| 1 | 実装と同時" in docs["plan-template.md"]:
+        errors.append("plan template duplicates the fallback order")
+    for name in ("risk-policy.md", "plan-template.md"):
+        for phrase in ("一律にHumanが担当する", "実機確認を必須とする", "レビュー後に実機確認する"):
+            if phrase in docs[name]:
+                errors.append(f"{name} imposes a universal verification gate: {phrase}")
     for phrase in ("承認権限を付与・省略するものではない", "リポジトリが要求する承認は省略不可",
                    "実装前のHuman承認", "停止してHumanに確認"):
         if phrase not in docs["risk-policy.md"]:
@@ -139,12 +181,29 @@ def main():
         ("plan-review.md", "Human の判断は AI レビュー完了と別に記録"),
         ("plan-review.md", "原則として同じ PR で実装と実装レビューを続ける"),
         ("implementer.md", "plan-review.md"),
+        ("risk-policy.md", "Human専属と決めつけない"),
+        ("risk-policy.md", "理由なく重複させない"),
+        ("risk-policy.md", "通常の文書差分確認だけで"),
+        ("risk-policy.md", "通常のテスト環境を用意するだけで"),
+        ("plan-template.md", "| Acceptance | 確認内容 | 担当 | 方法 | 適用状態と理由 |"),
+        ("SKILL.md", "## 検証順序の共通デフォルト"),
+        ("SKILL.md", "Phase 0"),
+        ("SKILL.md", "順序を明示する場合は、そちらを優先する"),
+        ("SKILL.md", "順序の明示指定がない場合は、次の順序"),
+        ("SKILL.md", "無効化だけで代替順序が不明"),
+        ("plan-template.md", "`SKILL.md` の「検証順序の共通デフォルト」"),
     )
     for name, phrase in mutations:
         assert phrase in docs[name], f"mutation target missing: {name}"
         mutated = dict(docs)
         mutated[name] = mutated[name].replace(phrase, "")
         assert validate(mutated), f"false green: {name} / {phrase}"
+    for name, phrase in (("risk-policy.md", "一律にHumanが担当する"),
+                         ("risk-policy.md", "実機確認を必須とする"),
+                         ("plan-template.md", "レビュー後に実機確認する")):
+        mutated = dict(docs)
+        mutated[name] += "\n" + phrase
+        assert validate(mutated), f"false green: {name} allows {phrase}"
     for name in NAMES:
         mutated = dict(docs)
         del mutated[name]
