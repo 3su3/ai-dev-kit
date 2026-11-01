@@ -1,6 +1,6 @@
 # 実装計画: Acceptance の検証責任を dev-flow に加える
 
-> **状態: Plan再レビュー・再承認待ち** — PR #9 の[実装レビュー追記](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544643993)で後方互換性のblocking findingが確認された。旧Plan版への[Human実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544503281)は本改訂に流用しない。追加実装・mergeは保留。
+> **状態: 追加実装済み・実装再レビュー待ち** — 改訂Plan `93a4435` への[Human追加実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6565303429)を受け、後方互換性の修正と使い捨て環境での検証を行った。blocking findingの解消認定とmergeは未承認。
 
 # 1. 概要
 
@@ -199,25 +199,25 @@ ai-dev-kit の Draft PR で Human Plan Review を受ける。対象版は Plan �
 
 # 10. 承認
 
-旧Plan revision `c135f4f` への[Human実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544503281)は、この後方互換性の改訂に適用しない。改訂版のcommit permalinkをPRに記録し、HumanのPlan再レビューと明示的な追加実装承認を確認するまで修正を実装しない。merge判断は別に必要。
+旧Plan revision `c135f4f` への[Human実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6544503281)は、この後方互換性の改訂に流用していない。[改訂Plan revision `93a4435`](https://github.com/3su3/ai-dev-kit/blob/93a44354685c291b366c9fa6c465ed23077c443e/docs/journal/acceptance-verification-responsibilities-plan.md)への[AI Plan再レビュー](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6565252410)と[Human追加実装承認](https://github.com/3su3/ai-dev-kit/pull/9#issuecomment-6565303429)を確認した。実装再レビューとmerge判断は別に必要。
 
 ## ビジネスレビュー
 
 - [ ] 承認
 
-コメント: 改訂版のHuman判断待ち。旧版の承認は上記PR記録を参照。
+コメント: 改訂版へのHuman追加実装承認は上記PR記録を参照。区分別の判定は記録されていない。
 
 ## エンジニアレビュー
 
 - [ ] 承認
 
-コメント: 改訂版のHuman判断待ち。旧版の承認は上記PR記録を参照。
+コメント: 改訂版へのHuman追加実装承認は上記PR記録を参照。区分別の判定は記録されていない。
 
 # 11. 完了条件
 
-- [ ] 改訂Plan版へのHuman再承認を確認した。
-- [ ] 共通デフォルト・上書き・Phase 0を承認範囲で実装した。
-- [ ] 後方互換性の静的検査と負例、適用可能な既存検査を実施した。
-- [ ] 使い捨て環境で順序指定なし・明示上書き・Phase 0を実測し、未実施項目を区別して記録した。
+- [x] 改訂Plan版へのHuman再承認を確認した。
+- [x] 共通デフォルト・上書き・Phase 0を承認範囲で実装した。
+- [x] 後方互換性の静的検査と負例、適用可能な既存検査を実施した。
+- [x] 使い捨て環境で順序指定なし・明示上書き・Phase 0を実測し、未実施項目を区別して記録した。
 - [ ] 実装レビューと Human の判断を経て Plan 状態を更新した。
 - [ ] 導入元の追跡記録に PR / 結果へのリンクを残した。
