@@ -23,6 +23,25 @@ gh api repos/OWNER/REPO/pulls/N/comments -f body='（返信）' -F in_reply_to=D
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread{ isResolved } } }' -F id=THREAD_ID
 ```
 
+## 返信・resolve 後の確認
+
+後続の判断が返信内容やスレッド状態に依存する場合は、書き込み応答の ID を使って
+保存後の状態を再取得する。返信は `body` と `in_reply_to_id` を承認済みの文面・返信先と
+照合する。resolve は対象 `threadId` の `isResolved` を確認する。
+
+```bash
+gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID \
+  --jq '{body,in_reply_to_id,pull_request_url}'
+gh api graphql -f query='
+query($id:ID!){ node(id:$id){ ... on PullRequestReviewThread{ id isResolved } } }
+' -F id=THREAD_ID --jq '.data.node | {id,isResolved}'
+```
+
+取得不能、空・欠落・`null`、不一致を成功と扱わず、確認できた範囲を報告して
+依存する後続処理を止める。
+返信・resolve を状態不明のまま繰り返さない。返信と resolve の間で返信の確認が
+必要なら、確認を済ませてから resolve へ進む。
+
 ## 口が2つに分かれている
 
 **返信は REST、resolve は GraphQL。** `resolve` に REST の口は無い。

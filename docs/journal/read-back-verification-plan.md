@@ -1,6 +1,6 @@
 # 実装計画: 外部書き込み後の結果確認
 
-> **状態: 承認待ち** — [Issue #13](https://github.com/3su3/ai-dev-kit/issues/13) の調査と提案。Human の実装承認は未取得。
+> **状態: 実装済み・レビュー待ち** — [Issue #13](https://github.com/3su3/ai-dev-kit/issues/13) の対応。[Draft PR #14](https://github.com/3su3/ai-dev-kit/pull/14) で実装・検証結果を共有し、実装レビュー待ち。
 
 # 1. 概要
 
@@ -122,7 +122,7 @@ Issue の具体的な到達経路に手順を置ける。GitHub 以外にも成�
 
 ## 新規作成ファイル
 
-- 本 Plan（承認前の判断記録）
+- `docs/journal/read-back-verification-plan.md`（承認前の判断記録）
 
 ## 削除ファイル
 
@@ -205,11 +205,11 @@ Issue の具体的な到達経路に手順を置ける。GitHub 以外にも成�
 
 ## Plan レビューの経路と記録
 
-このリポジトリの規約に従い、Plan だけの Draft PR で Human Plan Review を受ける。レビュー対象の commit SHA は PR 作成後に PR 本文へ記録する。AI Plan Review は依頼していないため、AI 指摘の再確認経路は非該当。Human の指摘・未解決事項・対象版への実装承認は同じ PR で確認する。
+このリポジトリの規約に従い、Plan だけの Draft PR #14 で Human Plan Review を受けた。レビュー対象は `83dc445a70ce96a5f5afe86d473db8af61db8877` で、PR 本文にも記録した。AI Plan Review は依頼していないため、AI 指摘の再確認経路は非該当。PR のコメント・レビューは実装開始時点では無く、未解決事項はなかった。
 
 # 10. 承認
 
-現在の Plan 版: Draft PR 作成後に commit SHA を記録する。Human の明示的な実装承認は未取得。Plan 共有とレビューを実装・Ready 化・merge の承認として扱わない。
+実装承認の対象 Plan 版: `83dc445a70ce96a5f5afe86d473db8af61db8877`。Human は会話で「実装を進めてOK」と明示承認した。Plan 共有と実装承認を Ready 化・merge の承認として扱わない。
 
 ## ビジネスレビュー
 
@@ -225,7 +225,15 @@ Issue の具体的な到達経路に手順を置ける。GitHub 以外にも成�
 
 # 11. 完了条件
 
-- [ ] 対象版の Human 実装承認後、Plan に沿って実装した。
-- [ ] 変更内容に適した検証を実行し、非該当と未実測を区別した。
-- [ ] 適用可能なテスト・Lint・静的解析と差分確認の結果を PR に記録した。
+- [x] 対象版の Human 実装承認後、Plan に沿って実装した。
+- [x] 変更内容に適した検証を実行し、非該当と未実測を区別した。
+- [x] 適用可能なテスト・Lint・静的解析と差分確認の結果を PR に記録した。
 - [ ] 必要なレビュー・承認を満たした。
+
+## 実装後の検証記録
+
+- 文書変更のため TDD は非該当。新しい検査道具は追加していない。
+- 単一ブランチの使い捨てクローンで `tests/verify-confidential.py`、`tests/verify-portable.py`、`tests/verify-harness-sync.py`、`tests/verify-review-discipline.py`、`tests/verify-dev-flow-risk.py`、`tests/verify-plan-status.py`、`tests/verify-install.py`、`git diff --check` は PASS。二つの `github.md` の bash ブロックも `bash -n` で構文確認した。これらは保存後の GitHub 状態やエージェントの遵守を判定しない。
+- `bin/harness-sync --verify` は、この端末の配布先が未同期・未導入で FAIL。配布先の変更は今回の対象外。使い捨て HOME への導入検査と、単一ブランチクローンでの検査は別に実施する。
+- 実際の GitHub レビュー投稿・返信・resolve 後にエージェントが再取得したかは未実測。使い捨ての GitHub 操作環境をこの実装作業では用意していない。GitHub 公式 API 文書で取得経路を確認し、文面とコマンドの整合を手動確認した。
+- `tests/verify-kiro-reach.py --run` と `tests/probe-skill-firing.py` は未実行。今回変更した同梱 `github.md` の到達・遵守を直接測る検査ではない。
