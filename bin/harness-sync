@@ -72,8 +72,12 @@ KIRO_ALWAYS = {"review-discipline"}
 
 # steering の枠に review-discipline を入れている理由: Kiro の実使用はレビューが主で、
 # 検証分を除くと レビュー 14 / 実装 4（2026-10-21 時点、セッション記録の依頼文で分類）。
-# **Orca から Kiro の agent は選べない**（`--agent` は TUI の種類だけ）ので、
-# steering の外へ出したものは Orca 経由では事実上載らない。使用の多い側を常時にする。
+#
+# **これは「agent を選べない入口から Kiro を使っている」場合の妥協。**
+# 素の Kiro CLI なら agent を選べるので、steering を薄く保ったまま、必要な skill の
+# agent を選べばよい。この既定は kit の推奨ではなく、**この環境の入口に合わせた設定**。
+# 入口が違う人は KIRO_ALWAYS を自分の入口に合わせて決め直す。
+# （この環境の入口は Orca。`--agent` は TUI の種類で、agent の選択ではない）
 
 # 随時のものを agent へまとめる。ここに挙げなかったスキルは
 # **1つずつ自分の agent を持つ**（`harness-<スキル名>`）。放置すると
