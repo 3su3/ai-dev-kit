@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""harness-reach — kit に書いたものが、どの面に届くかを出す。
+
+    harness-reach             全ファイル
+    harness-reach --changed   origin/main との差分だけ（PR を出す前に1回）
+
+**判定を自分で持たない。** 配り方の正は `harness-sync` なので、**それが実際に生成する
+内容へ本文が入っているか**で見る。配り方を変えれば、この道具の結果も自動で追随する。
+面の一覧を手で並べると、面が増えたときに静かに古くなる。
+
+**なぜ要るか。** スキルの同梱ファイル（`SKILL.md` 以外）は Claude にしか届かない。
+Kiro は本文を埋め込まれた分しか読まず、**ポインタを辿らない**（2026-10-19 実測、PR #9）。
+届かないことは書いた人からは見えず、**もっともらしい答えが返るので出力でも判別できない。**
+
+**警告だけで止めない。** 止める価値が測れるまでは exit 0。
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_sync():
+    """harness-sync を取り込む（`.py` ではないので loader を明示する）。"""
+    loader = importlib.machinery.SourceFileLoader("hsync", str(ROOT / "bin" / "harness-sync"))
+    spec = importlib.util.spec_from_loader("hsync", loader)
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ["harness-sync"]
+    try:
+        loader.exec_module(mod)
+    finally:
+        sys.argv = argv
+    return mod
+
+
+def probes(path, n=3):
+    """本文から指紋になる行を拾う。**短い行・記号だけの行は使わない。**
+
+    **frontmatter は飛ばす。** 配布物には本文しか入らないので、`description:` を
+    指紋にすると必ず外れる（偽の「届かない」になる）。
+    """
+    out = []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if lines and lines[0].strip() == "---":
+        end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), 0)
+        lines = lines[end + 1:]
+    for line in lines:
+        s = line.strip()
+        if len(s) >= 40 and not s.startswith(("```", "|", "---", "#")):
+            out.append(s)
+        if len(out) >= n:
+            break
+    return out
+
+
+def reaches(path, doc):
+    """本文が配布物に入っているか。**1行でも一致すれば届いている。**
+
+    入っていない＝届かない。`harness-sync` は本文を verbatim で埋めるので、
+    一致しないことは「埋められていない」を意味する。
+    """
+    p = probes(path)
+    if not p:
+        return None            # 判定材料が無い（短すぎるファイル）
+    return any(x in doc for x in p)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--changed", action="store_true",
+                    help="origin/main との差分（未コミットを含む）だけを見る")
+    a = ap.parse_args()
+
+    hs = load_sync()
+    built = hs.targets(None)
+    kiro = "\n".join(d for p, d in built.items() if ".kiro" in str(p))
+    codex = "\n".join(d for p, d in built.items() if ".codex" in str(p))
+
+    # **Claude は symlink で丸ごと届く。** それも決め打ちせず、実際の向き先で見る
+    link = Path.home() / ".claude" / "skills"
+    claude_ok = link.is_symlink() and link.resolve() == hs.SKILLS.resolve()
+
+    files = sorted(hs.SKILLS.glob("*/*.md"))
+    if a.changed:
+        changed = set()
+        for cmd in (["git", "diff", "--name-only", "origin/main...HEAD"],
+                    ["git", "diff", "--name-only", "HEAD"],
+                    ["git", "ls-files", "--others", "--exclude-standard"]):
+            out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            changed |= {l for l in out.stdout.splitlines() if l.strip()}
+        files = [f for f in files if str(f.relative_to(ROOT)) in changed]
+        if not files:
+            print("スキルの変更は無い")
+            return
+
+    if not claude_ok:
+        print(f"!! ~/.claude/skills が {hs.SKILLS} を向いていない。install.sh を実行する\n")
+
+    print("  ✓ 本文が届く   △ 案内だけ（開けば読める）   ✗ 届かない   ? 判定材料なし\n")
+    missing = []
+    for f in files:
+        name = f"{f.parent.name}/{f.name}"
+        k, c = reaches(f, kiro), reaches(f, codex)
+        mark = lambda v: "✓" if v else ("?" if v is None else "✗")
+        codex_mark = mark(c) if c else ("△" if f.name in codex or str(f.parent) in codex else "✗")
+        print(f"  {name:<42} claude:{'✓' if claude_ok else '✗'}  kiro:{mark(k)}  codex:{codex_mark}")
+        if k is False:
+            missing.append(name)
+
+    if missing:
+        print(f"\n!! Kiro に届かない: {len(missing)} 件")
+        for m in missing:
+            print(f"     {m}")
+        print("""
+   届かないことは書いた人からは見えない。次のどれかで閉じる。
+     1. 中身を SKILL.md へ移す（随時読まれる。常時枠は増えない）
+     2. ファイル冒頭に「この規則が効くのは Claude / Codex」と書く
+     3. 届かないままでよい理由を書く
+""")
+
+
+if __name__ == "__main__":
+    main()
