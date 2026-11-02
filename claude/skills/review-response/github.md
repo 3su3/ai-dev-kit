@@ -28,11 +28,9 @@ gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:
 > **この手順が効くのは Claude と Codex。** Kiro には同梱ファイルが届かない
 > （`bin/harness-reach` で確認できる）。Kiro で投稿する経路があるなら、そこでは効かない。
 
-**書き込んだら毎回、応答の ID を使って保存後の状態を再取得する。** 返信は `body` と
-`in_reply_to_id` を承認済みの文面・返信先と照合する。resolve は対象 `threadId` の
-`isResolved` を確認する。
-
-**「確認が要る場面か」を自分で判断しない。**（理由は `review-discipline/github.md` と同じ）
+後続の判断が返信内容やスレッド状態に依存する場合は、書き込み応答の ID を使って
+保存後の状態を再取得する。返信は `body` と `in_reply_to_id` を承認済みの文面・返信先と
+照合する。resolve は対象 `threadId` の `isResolved` を確認する。
 
 ```bash
 gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID \
