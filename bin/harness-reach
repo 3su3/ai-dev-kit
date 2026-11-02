@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""harness-reach — kit に書いたものが、どの面に届くかを出す。
+
+    harness-reach             全ファイル
+    harness-reach --changed   origin/main との差分だけ（PR を出す前に1回）
+
+**判定を自分で持たない。** 配り方の正は `harness-sync` なので、**それが実際に生成する
+内容へ本文が入っているか**で見る。配り方を変えれば、この道具の結果も自動で追随する。
+面の一覧を手で並べると、面が増えたときに静かに古くなる。
+
+**なぜ要るか。** スキルの同梱ファイル（`SKILL.md` 以外）は Claude にしか届かない。
+Kiro は本文を埋め込まれた分しか読まず、**ポインタを辿らない**（2026-10-19 実測、PR #9）。
+届かないことは書いた人からは見えず、**もっともらしい答えが返るので出力でも判別できない。**
+
+**Kiro は「配られた」と「読まれる」が違う。** `steering/` は入口を問わず常時載るが、
+`harness-parts/` は**それを参照する agent を選んだときだけ**載る。ここを一緒にすると
+「配布物に入っている＝届く」という偽の緑になる（2026-11-02 に実際に出した）。
+
+**入口は人によって違う。** 素の Kiro CLI なら agent を選べるので `agent:` のものも載る。
+agent を選べない入口（ラッパーによってはそうなる）では `常時` だけが載る。
+**この道具は特定の入口を既定にしない。** どちらに当たるかは使う人が知っている。
+
+**ここで分かるのは「載る経路があるか」まで。** 実際に読まれたかは別の問題で、
+`tests/verify-kiro-reach.py --run` が合言葉で測る（LLM を呼ぶので既定では走らない）。
+**`常時` は「読まれた」ではない。** 載っていても参照されないことはある。
+
+**警告だけで止めない。** 止める価値が測れるまでは exit 0。
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_sync():
+    """harness-sync を取り込む（`.py` ではないので loader を明示する）。"""
+    loader = importlib.machinery.SourceFileLoader("hsync", str(ROOT / "bin" / "harness-sync"))
+    spec = importlib.util.spec_from_loader("hsync", loader)
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ["harness-sync"]
+    try:
+        loader.exec_module(mod)
+    finally:
+        sys.argv = argv
+    return mod
+
+
+def probes(path, n=3):
+    """本文から指紋になる行を拾う。**短い行・記号だけの行は使わない。**
+
+    **frontmatter は飛ばす。** 配布物には本文しか入らないので、`description:` を
+    指紋にすると必ず外れる（偽の「届かない」になる）。
+    """
+    out = []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if lines and lines[0].strip() == "---":
+        end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), 0)
+        lines = lines[end + 1:]
+    for line in lines:
+        s = line.strip()
+        if len(s) >= 40 and not s.startswith(("```", "|", "---", "#")):
+            out.append(s)
+        if len(out) >= n:
+            break
+    return out
+
+
+def reaches(path, doc):
+    """本文が配布物に入っているか。**1行でも一致すれば届いている。**
+
+    入っていない＝届かない。`harness-sync` は本文を verbatim で埋めるので、
+    一致しないことは「埋められていない」を意味する。
+    """
+    p = probes(path)
+    if not p:
+        return None            # 判定材料が無い（短すぎるファイル）
+    return any(x in doc for x in p)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--changed", action="store_true",
+                    help="origin/main との差分（未コミットを含む）だけを見る")
+    a = ap.parse_args()
+
+    hs = load_sync()
+    built = hs.targets(None)
+    codex = "\n".join(d for p, d in built.items() if ".codex" in str(p))
+    steering = {p: d for p, d in built.items() if ".kiro" in str(p) and "steering" in str(p)}
+    parts = {p: d for p, d in built.items() if ".kiro" in str(p) and "harness-parts" in str(p)}
+
+    # **どの agent がその部品を指しているかは、agent 定義から引く。** 手で並べない。
+    # こちらが作っていない agent（kirocrew 等）も同じ場所にあるので一緒に拾える。
+    agents_dir = Path.home() / ".kiro" / "agents"
+    refs = {}
+    if agents_dir.is_dir():
+        for j in sorted(agents_dir.glob("*.json")):
+            if j.name.endswith(".bak") or ".bak." in j.name:
+                continue
+            try:
+                text = j.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for part in parts:
+                if part.name in text:
+                    refs.setdefault(part.name, []).append(j.stem)
+
+    def kiro_status(f):
+        if not probes(f):
+            return "?"          # **判定材料が無いものを「届かない」と断定しない**
+        if any(reaches(f, d) for d in steering.values()):
+            return "常時"
+        for part, d in parts.items():
+            if reaches(f, d):
+                who = refs.get(part.name) or []
+                return "agent:" + ",".join(sorted(who)) if who else "agent:無し"
+        return "✗"
+
+    # **Claude は symlink で丸ごと届く。** それも決め打ちせず、実際の向き先で見る
+    link = Path.home() / ".claude" / "skills"
+    claude_ok = link.is_symlink() and link.resolve() == hs.SKILLS.resolve()
+
+    files = sorted(hs.SKILLS.glob("*/*.md"))
+    if a.changed:
+        changed = set()
+        for cmd in (["git", "diff", "--name-only", "origin/main...HEAD"],
+                    ["git", "diff", "--name-only", "HEAD"],
+                    ["git", "ls-files", "--others", "--exclude-standard"]):
+            out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            changed |= {l for l in out.stdout.splitlines() if l.strip()}
+        files = [f for f in files if str(f.relative_to(ROOT)) in changed]
+        if not files:
+            print("スキルの変更は無い")
+            return
+
+    if not claude_ok:
+        print(f"!! ~/.claude/skills が {hs.SKILLS} を向いていない。install.sh を実行する\n")
+
+    print("  kiro 常時=どの入口でも載る / agent:名前=その agent を選べる入口でだけ載る")
+    print("       agent を選べない入口（ラッパー等）では 常時 だけが載る")
+    print("  codex △=案内だけ（開けば読める）   ✗=届かない\n")
+    missing = []
+    for f in files:
+        name = f"{f.parent.name}/{f.name}"
+        k = kiro_status(f)
+        c = reaches(f, codex)
+        codex_mark = "✓" if c else ("△" if f.name in codex or str(f.parent) in codex else "✗")
+        print(f"  {name:<42} claude:{'✓' if claude_ok else '✗'}  kiro:{k:<22} codex:{codex_mark}")
+        if k != "常時":
+            missing.append((name, k))
+
+    if missing:
+        gated = [(n, k) for n, k in missing if k.startswith("agent:")]
+        never = [(n, k) for n, k in missing if not k.startswith("agent:")]
+        print(f"\n   どの入口でも載る              {len(files) - len(missing)} 件")
+        print(f"   agent を選べる入口でだけ載る   {len(gated)} 件")
+        print(f"!! どこにも載らない              {len(never)} 件")
+        for n, k in gated:
+            print(f"     [agent] {n}  （{k[6:]}）")
+        for n, k in never:
+            print(f"     [✗]     {n}" + ("  （判定材料なし）" if k == "?" else ""))
+        print("""
+   届かないことは書いた人からは見えない。**閉じ方は、その skill がどこへ配られるかで違う。**
+
+   **入口が agent を選べるなら、agent: のものは閉じている。** 以下は選べない入口の話。
+
+   KIRO_ALWAYS の skill（steering 行き）の同梱ファイル
+     → SKILL.md へ移せば常時載る。ただし**常時枠が太る**（遵守が落ちる側に効く実測あり）
+
+   それ以外の skill（harness-parts 行き）
+     → SKILL.md へ移しても **agent を選べない入口では載らない**。次のどれか
+        a. KIRO_ALWAYS に入れる（常時枠を使う）
+        b. その skill を使うときは agent を選べる入口を使うと決める
+        c. 載らないままでよい理由を書く
+
+   どの skill でも共通
+     → ファイル冒頭に「この規則が効く面」を書けば、読む側が欠けに気づける
+
+   **載る経路があっても、読まれたことにはならない。**
+   実際に読まれたかは tests/verify-kiro-reach.py --run（合言葉で測る）
+""")
+
+
+if __name__ == "__main__":
+    main()
