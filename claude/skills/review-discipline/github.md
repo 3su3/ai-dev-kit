@@ -45,3 +45,24 @@ gh api repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/review.json
 - **差分に無い行を1つでも混ぜると、レビュー全体が投稿されない。** `422 Line could not be resolved`
   が返り、同じ呼び出しに入れた**妥当な指摘も1件も残らない**（実測済み）。
   行番号に自信が無い指摘は、インラインに入れず本文へ回す
+
+## 投稿後の確認
+
+> **この手順が効くのは Claude と Codex。** Kiro には同梱ファイルが届かない
+> （`bin/harness-reach` で確認できる）。Kiro で投稿する経路があるなら、そこでは効かない。
+
+API の成功だけで、承認された文面が保存されたとは判断しない。後続の判断や報告が
+投稿内容に依存する場合は、投稿応答の `id` でレビューを再取得し、本文と判定を確認する。
+インラインを付けた場合は、そのレビューのコメントも再取得し、期待した件数と
+対象行・本文を照合する。確認する項目は誤保存時の影響に合わせて選ぶ。
+
+```bash
+gh api repos/OWNER/REPO/pulls/N/reviews/REVIEW_ID --jq '{body,state}'
+gh api --paginate repos/OWNER/REPO/pulls/N/reviews/REVIEW_ID/comments \
+  --jq '.[] | {path,line,side,body}'
+```
+
+`state` は投稿時の `event` と表記が異なる場合があるため、意味で照合する。
+**本文は末尾の空白・改行が増減する**ので、`diff` の生結果を不一致としない。意味で見る。
+結果が空・欠落・`null`、または期待と異なる場合は投稿済みと断定せず、確認できた範囲と
+不一致を報告して、結果に依存する後続処理を止める。状態不明のまま再投稿しない。
