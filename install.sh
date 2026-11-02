@@ -18,6 +18,13 @@ link() {
 
 link claude/skills "$HOME/.claude/skills"
 
+# 個人の既定（gitignore 済みなので人によって有無が違う）。
+# dev-flow / review-discipline / review-response が `~/.claude/harness.local.md` を読む。
+# 無ければ張らない。
+if [ -f "$SRC/local/harness.md" ]; then
+  link local/harness.md "$HOME/.claude/harness.local.md"
+fi
+
 # ~/.claude/CLAUDE.md は symlink にしない。
 #   - 同じファイル内の相対 import（`@CLAUDE.ndf.md` 等）の解決先が変わりうる
 #   - プラグインが生成・追記する場合があり、上書き合戦になる
