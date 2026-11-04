@@ -18,6 +18,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SQ = os.path.join(ROOT, "local", "sq-time")
 ok = True
 
+# **道具が無い環境では飛ばす。** `local/*` は gitignore なので CI には存在しない。
+# 無いまま走らせると全項目が FAIL になり、**偽の赤**で本物の失敗が埋もれる。
+if not os.path.exists(SQ):
+    print("SKIP: local/sq-time が無い（個人層。gitignore 配下）。"
+          "道具のある環境で走らせること")
+    sys.exit(0)
+
 
 def check(label, cond, detail=""):
     global ok
