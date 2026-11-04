@@ -113,6 +113,37 @@ with tempfile.TemporaryDirectory() as tmp:
           len(taken) == 2 and all(e["phase"] == "plan:作成" and e["issue"] == 15999 for e in taken),
           f"{[(e['phase'], e['issue']) for e in taken]}")
 
+print("\n## 4b. 段だけ切り替えても番号は引き継ぐ（番号なしマーカーで潰さない）")
+with tempfile.TemporaryDirectory() as tmp:
+    dash = os.path.join(tmp, "dash")
+    fixture(dash,
+            ("2026-11-04T01:00:00+00:00", "#plan 15999", [60000]),
+            ("2026-11-04T02:00:00+00:00", "セルフレビューして #self", [120000]))
+    run(tmp, "import-kirocrew", dash=dash)
+    taken = [e for e in log_rows(tmp) if not e.get("suppressed")]
+    check("2区間とも #15999 に乗る",
+          len(taken) == 2 and all(e["issue"] == 15999 for e in taken),
+          f"{[(e['phase'], e['issue']) for e in taken]}")
+    check("段は切り替わる",
+          {e["phase"] for e in taken} == {"plan:作成", "実装:セルフレビュー"},
+          f"{sorted({e['phase'] for e in taken})}")
+
+print("\n## 4c. 進行中（未クローズ）のライブ区間とも重なりを見る")
+with tempfile.TemporaryDirectory() as tmp:
+    dash = os.path.join(tmp, "dash")
+    fixture(dash, ("2026-11-04T01:00:00+00:00", "#plan 15999", [600000]))
+    base = datetime.datetime.fromisoformat("2026-11-04T01:00:00+00:00").astimezone().replace(tzinfo=None)
+    # ログには無く、state.open にだけ在る区間（tick-start 済み・tick-stop 前）
+    with open(os.path.join(tmp, "state.json"), "w") as f:
+        json.dump({"open": {"/x": {"issue": 15999, "phase": "実装:作成",
+                                   "since": base.isoformat()}},
+                   "current": {}, "days": {}, "posted": []}, f, ensure_ascii=False)
+    run(tmp, "import-kirocrew", dash=dash)
+    taken = [e for e in log_rows(tmp) if not e.get("suppressed")]
+    supp = [e for e in log_rows(tmp) if e.get("suppressed")]
+    check("進行中と重なる区間を取り込まない", len(taken) == 0, f"取り込み {len(taken)} 件")
+    check("見送りとして残る", len(supp) == 1)
+
 print("\n## 5. マーカーが無いセッションは0件")
 with tempfile.TemporaryDirectory() as tmp:
     dash = os.path.join(tmp, "dash")
