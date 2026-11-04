@@ -40,8 +40,10 @@ query($id:ID!){ node(id:$id){ ... on PullRequestReviewThread{ id isResolved } } 
 ' -F id=THREAD_ID --jq '.data.node | {id,isResolved}'
 ```
 
-取得不能、空・欠落・`null`、不一致を成功と扱わず、確認できた範囲を報告して
-依存する後続処理を止める。
+取得不能、空・欠落・`null` は、その確認対象の保存状態が未確認と報告する。
+再取得した返信やスレッドが期待と異なれば、存在を確認できた範囲と不一致を
+分けて報告する。
+どちらも期待どおりの完了とはせず、依存する後続処理を止める。
 返信・resolve を状態不明のまま繰り返さない。返信と resolve の間で返信の確認が
 必要なら、確認を済ませてから resolve へ進む。
 

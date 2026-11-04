@@ -1,6 +1,6 @@
 # 実装計画: 外部書き込み後の結果確認
 
-> **状態: 実装済み・レビュー待ち** — [Issue #13](https://github.com/3su3/ai-dev-kit/issues/13) の対応。[Draft PR #14](https://github.com/3su3/ai-dev-kit/pull/14) で実装・検証結果を共有し、実装レビュー待ち。
+> **状態: 実装済み・追補レビュー待ち** — [Issue #13](https://github.com/3su3/ai-dev-kit/issues/13) の対応。[PR #14](https://github.com/3su3/ai-dev-kit/pull/14) はマージ済み。レビューで残った2点を追補修正中。
 
 # 1. 概要
 
@@ -205,23 +205,23 @@ Issue の具体的な到達経路に手順を置ける。GitHub 以外にも成�
 
 ## Plan レビューの経路と記録
 
-このリポジトリの規約に従い、Plan だけの Draft PR #14 で Human Plan Review を受けた。レビュー対象は `83dc445a70ce96a5f5afe86d473db8af61db8877` で、PR 本文にも記録した。AI Plan Review は依頼していないため、AI 指摘の再確認経路は非該当。PR のコメント・レビューは実装開始時点では無く、未解決事項はなかった。
+このリポジトリの規約に従い、Plan だけの Draft PR #14 で [Human Plan Review](https://github.com/3su3/ai-dev-kit/pull/14#pullrequestreview-5732595424) を受けた。レビュー対象は `83dc445a70ce96a5f5afe86d473db8af61db8877` で、PR 本文にも記録した。AI Plan Review は依頼していないため、AI 指摘の再確認経路は非該当。実装開始時点の Plan レビューに未解決の指摘はなかった。
 
 # 10. 承認
 
-実装承認の対象 Plan 版: `83dc445a70ce96a5f5afe86d473db8af61db8877`。Human は会話で「実装を進めてOK」と明示承認した。Plan 共有と実装承認を Ready 化・merge の承認として扱わない。
+実装承認の対象 Plan 版: `83dc445a70ce96a5f5afe86d473db8af61db8877`。[Human Plan Review](https://github.com/3su3/ai-dev-kit/pull/14#pullrequestreview-5732595424) と会話での「実装を進めてOK」により、実装着手が明示承認された。Plan 共有と実装承認を Ready 化・merge の承認として扱わない。
 
 ## ビジネスレビュー
 
 - [ ] 承認
 
-コメント: 未実施。
+コメント: 業務変更がないため非該当。
 
 ## エンジニアレビュー
 
-- [ ] 承認
+- [x] 承認
 
-コメント: 未実施。
+コメント: [PR #14 の Human Plan Review](https://github.com/3su3/ai-dev-kit/pull/14#pullrequestreview-5732595424) が対象版の実装着手を承認。Ready 化・merge の承認は含まない。
 
 # 11. 完了条件
 
