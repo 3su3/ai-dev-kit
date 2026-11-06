@@ -36,7 +36,10 @@ SKILLS = pathlib.Path(__file__).resolve().parent.parent / "claude" / "skills"
 # 置き場所を変えるときは、ここも手で変える。
 EXPECT_ALWAYS = {"review-discipline"}            # steering に置く（使用が最多）
 EXPECT_ON_DEMAND = {"dev-flow", "review-response"}  # harness-parts に置く
-EXPECT_AGENTS = {"harness-impl": {"dev-flow"},
+# **harness-impl は無くなった。** Kiro はレビュー専任になり、実装の進め方
+# （dev-flow）を載せる相手が居ない。dev-flow は group に入らない随時スキルとして
+# 自分の agent（harness-dev-flow）を持つ。選べば載るが、既定では載らない。
+EXPECT_AGENTS = {"harness-dev-flow": {"dev-flow"},
                  "harness-response": {"review-response"}}
 
 # **既定が「随時」であること。** ここが逆だと、スキルを足した人が何もしなくても
@@ -52,8 +55,20 @@ EXPECT_DEFAULT_ON_DEMAND = True
 # 上げた分で入れたのは、計画をレビューするときの観点。**Kiro は同梱ファイルを
 # 開かないので、常時読みに置かないと届かない**（同日に合言葉で測定済み）。
 #
-# **次に同じ要求が来たら、上げずに主張を狭める。** 2回上げたら歯止めではない。
-STEERING_BUDGET = 3920
+# **2026-11-06 に 3920 → 7600 へ上げた。2回目。**
+# 前回「次は上げずに主張を狭める」と書いた。今回はその例外にあたると判断した理由を書く。
+#
+# 1. **数え方が変わった。** それまで steering しか数えておらず、既定 agent の
+#    resources を見ていなかった。既定 agent は選ばなくても載るので常時読みである。
+#    同日に既定を harness-impl にしたとき 3,936 字が常時側へ移ったのに、この検査は
+#    緑のままだった。**3920 は実態の半分を見た数字**で、新しい数字とは比較できない。
+# 2. **実態は減っている。** 数え方を揃えると 7,855 → 7,500 字。
+# 3. **Kiro の役割が狭まった。** plan も実装も Claude が書き、Kiro はレビュー専任に
+#    なった。常時読みがレビューの観点で埋まるのは、その面では正しい状態。
+#
+# **次に上げたくなったら、まず Kiro の役割をもう一段狭められないかを見る。**
+# 枠が足りないのは、たいてい面に仕事を持たせすぎている。
+STEERING_BUDGET = 7600
 
 
 def load():
@@ -94,10 +109,21 @@ def main():
               "常時読みに戻っている")
     # **実際に置かれる中身で数える。** 本文だけだと包みのコメント分が落ちて、
     # 上限の判定が甘くなる（2026-10-21 に 180 字ぶん甘く出ていた）。
-    total = sum(len(ns["wrap"](b)) for p, b in kiro.items() if p.parent == ST)
+    steering_total = sum(len(ns["wrap"](b)) for p, b in kiro.items() if p.parent == ST)
+    # **既定 agent の resources も常時読み。** agent を選ばなくても載るので、
+    # steering だけ数えると実態の半分しか見えない。実際、既定 agent を
+    # harness-impl にした日に 3,936 字が常時側へ移ったのに、この検査は緑のまま
+    # だった（2026-11-06）。**数える対象を、載る経路で決める。**
+    default_agent = ns["default_kiro_agent"]()
+    agent_total, agent_parts = ns["always_on_agent_chars"](kiro, default_agent)
+    total = steering_total + agent_total
     check(f"常時読みが {STEERING_BUDGET} 字以内", total <= STEERING_BUDGET,
-          f"実際 {total} 字。増やす前に1つ落とす（①層）")
+          f"実際 {total} 字（steering {steering_total} ＋ 既定 agent {agent_total}）。"
+          "増やす前に1つ落とす（①層）")
     print(f"       常時読み {total} 字 / 上限 {STEERING_BUDGET} 字")
+    print(f"         steering {steering_total} 字")
+    print(f"         既定 agent {default_agent or '（設定なし）'} {agent_total} 字"
+          f"{'  ' + ', '.join(agent_parts) if agent_parts else ''}")
 
     # **常時読みに「いつ読むか」を入れない。** 発火させる対象が無い
     # （steering は必ず読まれる）。随時のものには要る。

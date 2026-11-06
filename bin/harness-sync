@@ -83,8 +83,19 @@ KIRO_ALWAYS = {"review-discipline"}
 # **1つずつ自分の agent を持つ**（`harness-<スキル名>`）。放置すると
 # どの agent からも指されず、載らないまま気づけないため。
 KIRO_AGENTS = {
-    "impl": ["dev-flow"],
     "response": ["review-response"],
+}
+
+# **Kiro へは SKILL.md しか配っていない。** 同梱ファイルは「同じディレクトリに
+# ある」と在処を案内するだけで、**Kiro はポインタを辿らない**（2026-10-19 実測）。
+# そのため計画の雛形もレビューのチェックリストも届いておらず、エージェントは
+# 自前の構成で書いた（2026-11-06 実測）。
+#
+# ここに挙げた同梱ファイルは、本文へ**埋め込む**。常時読みの枠を食うので、
+# **その面がその skill しか使わないときだけ**挙げる。いまの Kiro はレビュー専任で、
+# plan も実装も Claude が書く。だからレビューの観点を常時に置くのは筋が通る。
+KIRO_EMBED = {
+    "review-discipline": ["plan-checklist.md", "checklist.md", "judgement.md"],
 }
 MARK_BEGIN = "<!-- harness-sync:begin 自動生成。直接編集しない。正本は ~/work/dotfiles -->"
 MARK_END = "<!-- harness-sync:end -->"
@@ -118,6 +129,40 @@ def skill_pointer(name, desc):
     return (f"**いつ読むか:** {desc}\n\n"
             f"本文は `{d}/SKILL.md` にある。**必要になったら読む。**\n"
             f"同じディレクトリに同梱ファイル（手順の本体）がある。")
+
+
+def default_kiro_agent(settings=None):
+    """Kiro の既定 agent の名前。**読めなければ None**（「既定なし」と区別する）。
+
+    既定にした agent の resources は、agent を選ばなくても載る。**つまり常時読み。**
+    """
+    p = settings or (HOME / ".kiro" / "settings" / "cli.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("chat.defaultAgent") or None
+    except (OSError, ValueError):
+        return None
+
+
+def always_on_agent_chars(built, agent_name):
+    """既定 agent が指す harness-parts の字数と、その内訳。
+
+    **既定が分からないときは 0 にしない**のが理想だが、分からない相手の分を
+    数えようがないので 0 を返す。その代わり内訳を空で返し、呼ぶ側が
+    「既定なし」と表示できるようにしてある。
+    """
+    if not agent_name:
+        return 0, []
+    want = KIRO_AGENTS.get(agent_name.replace("harness-", ""), [])
+    if not want:
+        return 0, []
+    total, parts = 0, []
+    for path, body in built.items():
+        if path.parent.name != "harness-parts":
+            continue
+        if path.stem in want:
+            total += len(wrap(body))
+            parts.append(path.stem)
+    return total, sorted(parts)
 
 
 def wrap(body):
@@ -180,6 +225,14 @@ def targets(only, passphrase=None):
             doc = (f"# {name}\n\n{head_}"
                    f"本文中の `xxx.md` は `{SKILLS / name}/` にある同梱ファイルを指す。\n\n"
                    f"---\n\n{body.rstrip()}")
+            # **挙げた同梱ファイルは埋め込む。** 在処を書いても Kiro は開かない。
+            for fn in KIRO_EMBED.get(name, []):
+                src = SKILLS / name / fn
+                if not src.is_file():
+                    raise SystemExit(
+                        f"KIRO_EMBED が指す同梱ファイルが無い: {src}\n"
+                        "  名前が変わったか消えた。**黙って飛ばさない**")
+                doc += f"\n\n---\n\n## 同梱: {fn}\n\n{src.read_text(encoding='utf-8').strip()}"
             # **随時のスキルにだけ在処を足す。** 常時のスキルへ足すと、
             # そのスキルを使わない回にも枠を食う。常時のスキルで個人の既定が要るなら、
             # **それを使う同梱ファイルの中で在処を書く**（必要な回にだけ読まれる）。
