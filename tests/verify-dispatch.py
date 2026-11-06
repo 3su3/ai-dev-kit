@@ -87,6 +87,44 @@ def main() -> int:
         ok &= hit
         print(f"  {'ok  ' if hit else 'FAIL'} {why:20s} -> {got!r} (期待 None。空リストではない)")
 
+    print("\n== 送り先の端末が1つに決まるときだけ送るか ==")
+    # 決められないのに送ると、**無関係の端末へ本文を流し込む**。
+    for before, after, want, why in [
+        ({"a"},      {"a", "b"},      "b",  "1つ増えた"),
+        ({"a"},      {"a"},           None, "増えていない＝端末ができていない"),
+        ({"a"},      {"a", "b", "c"}, None, "**2つ増えた。どれか決められない**"),
+        (None,       {"a", "b"},      None, "**前が取れていない**"),
+        ({"a"},      None,            None, "**後が取れていない**"),
+    ]:
+        got = m.new_handle(before, after)
+        hit = got == want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} {str(before):16s}->{str(after):18s} -> {got!r} ({why})")
+
+    print("\n== 端末一覧が取れないときに「空」と言わないか ==")
+    for rc, out, why in [(1, "", "Orca が落ちている"), (0, "壊れた", "返事が壊れている")]:
+        m.run = lambda cmd, _rc=rc, _o=out, **k: types.SimpleNamespace(
+            returncode=_rc, stdout=_o, stderr="")
+        try:
+            got = m.terminal_handles()
+        finally:
+            m.run = real_run
+        hit = got is None
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} {why:18s} -> {got!r} (期待 None。set() ではない)")
+
+    print("\n== 送り先が無ければ送らないか ==")
+    called = []
+    m.run = lambda cmd, **k: (called.append(cmd) or
+                              types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    try:
+        sent = m.deliver(None, "本文")
+    finally:
+        m.run = real_run
+    hit = (sent is False) and not called
+    ok &= hit
+    print(f"  {'ok  ' if hit else 'FAIL'} handle=None -> 送った回数 {len(called)} (期待 0)")
+
     print("\n== 番号を引く規則を自前で持っていないか ==")
     bad = [l for l in TOOL.read_text().splitlines()
            if re.search(r"""r["'][^"']*\\d\{[0-9]""", l)]
