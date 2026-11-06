@@ -22,6 +22,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 import types
 
 TOOL = pathlib.Path(__file__).resolve().parent.parent / "local" / "harness-dispatch"
@@ -73,6 +74,8 @@ def main() -> int:
           {"branch": "refs/heads/someone/日本語", "path": "/w/c"},
           {"branch": "refs/heads/chore/no-number", "path": "/w/d"}]
     real_run = m.run
+    real_wait = m.wait_idle
+    real_deliver = m.deliver
     m.run = lambda cmd, **k: types.SimpleNamespace(
         returncode=0, stdout=json.dumps({"result": {"worktrees": ws}}), stderr="")
     try:
@@ -130,6 +133,7 @@ def main() -> int:
     called = []
     m.run = lambda cmd, **k: (called.append(cmd) or
                               types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    m.started_working = lambda h, limit=None: True
     try:
         sent = m.deliver(None, "本文")
     finally:
@@ -196,26 +200,82 @@ def main() -> int:
         print(f"  {'ok  ' if hit else 'FAIL'} {why:38s} -> {got!r} "
               f"(期待 {want!r}, 尋ねた回数 {len(f.calls)})")
 
+    print("\n== 送ったことを「届いた」と同じ顔にしないか ==")
+    # **今日の実害。** terminal send は通るのに TUI へ入らないことがある。道具は
+    # 「送った」と報告し、段が立たないことで初めて気づいた。**働き始めたかで測る。**
+    SATZ = json.dumps({"result": {"wait": {"satisfied": True}}})
+    BUSY = json.dumps({"result": {"wait": {"satisfied": False}}})
+    for seq, want, why in [
+        ([(0, BUSY)],            True,  "待たされた＝働いている＝届いた"),
+        ([(0, SATZ)],            False, "**暇なまま。届いていない**"),
+        ([(1, "")],              False, "**尋ねられない。届いたと言わない**"),
+        ([(0, "こわれ")],         False, "返事が壊れている"),
+    ]:
+        mm = _load()
+        mm.run = _fake(seq)
+        mm.START_TIMEOUT_SEC = 1.0
+        got = mm.started_working("t")
+        hit = got is want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} {why:34s} -> {got!r}")
+
+    print("\n== 送る前に落ち着くのを待つか ==")
+    # 立てた直後はまだ起動中で、送っても落ちる。accepted は返るので気づけない。
+    mm = _load()
+    sent = []
+    mm.wait_idle = lambda h, settle=None: False      # まだ落ち着いていない
+    mm.run = lambda cmd, **k: (sent.append(cmd) or
+                               types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    got = mm.deliver("t", "本文")
+    hit = got is False and not sent
+    ok &= hit
+    print(f"  {'ok  ' if hit else 'FAIL'} 落ち着く前は送らない（送った回数 {len(sent)}）")
+
+    print("\n== 本文と改行の間を空けるか ==")
+    mm = _load()
+    mm.wait_idle = lambda h, settle=None: True
+    mm.started_working = lambda h, limit=None: True
+    marks = []
+    mm.run = lambda cmd, **k: (marks.append(time.time()) or
+                               types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    import time as _time
+    t0 = _time.time(); mm.deliver("t", "本文"); 
+    gap = (marks[1] - marks[0]) if len(marks) >= 2 else 0
+    hit = len(marks) >= 2 and gap >= 0.5
+    ok &= hit
+    print(f"  {'ok  ' if hit else 'FAIL'} 本文→改行の間 {gap:.2f} 秒（0.5 秒以上）")
+
+    print("\n== 配線: deliver が確認の結果を返すか ==")
+    # **純粋な部分のテストは部品しか守らない。** deliver が started_working を
+    # 呼ばなくなっても、部品の試験は緑のまま。**呼んだ結果を返すこと**を測る。
+    for verdict, want in [(True, True), (False, False)]:
+        mm = _load()
+        mm.wait_idle = lambda h, settle=None: True
+        mm.started_working = lambda h, limit=None, _v=verdict: _v
+        mm.run = lambda cmd, **k: types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        got = mm.deliver("t", "本文")
+        hit = got is want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} 確認={verdict} -> deliver={got!r} (期待 {want})")
+
     print("\n== 連鎖: 待てなかったら次を送らない ==")
-    # **働いている最中へ送ると、前の段の途中に割り込む。** 待てなかったとき
-    # （取得失敗・時間切れ）に次を送らないことが、この仕組みの安全弁。
+    # **連鎖の論理だけを測る。** deliver は自分でも落ち着きを見るようになったので、
+    # ここで本物を呼ぶと「送る前に止まる」のか「次へ進まない」のかが混ざる。
     import types as _t2
-    real_wait = m.wait_idle
     for verdict, want_sent, why in [
         (True,  2, "落ち着いた → 2本とも送る"),
         (False, 1, "**時間切れ → 2本目を送らない**"),
         (None,  1, "**測れない → 2本目を送らない**"),
     ]:
-        calls = []
+        sent_log = []
         m.wait_idle = lambda h, settle=None, _v=verdict: _v
-        m.run = lambda cmd, **k: (calls.append(cmd) or
-                                  _t2.SimpleNamespace(returncode=0, stdout="", stderr=""))
+        m.deliver = lambda h, t: (sent_log.append(t) or True)
         try:
             got = m.deliver_chain("term_x", ["ひとつめ", "ふたつめ"])
         finally:
             m.wait_idle = real_wait
-            m.run = real_run
-        hit = got == want_sent
+            m.deliver = real_deliver
+        hit = got == want_sent and len(sent_log) == want_sent
         ok &= hit
         print(f"  {'ok  ' if hit else 'FAIL'} 待ちの結果={verdict!r} -> 送った {got} 本 "
               f"(期待 {want_sent}) — {why}")
