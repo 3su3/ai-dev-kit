@@ -96,6 +96,20 @@ def main() -> int:
         print(f"  {'ok  ' if hit else 'FAIL'} status={status!r:14s} -> {'伝える' if got else '黙る'}"
               f"  （{why}）")
 
+    print("\n== 表示が動きと食い違わないか ==")
+    # 「伝える」と出しながら送信を飛ばしていた。表示と動きが食い違うと、ログを
+    # 数えても当てにならない。
+    for team, status, want, why in [
+        (None,           None,          "伝えられない", "**担当がいない。相手がいない**"),
+        ("chore/team-a", "in-progress", "伝える",       "伝える"),
+        ("chore/team-a", "in-review",   "伝え済み",     "もう伝えた"),
+    ]:
+        got = m.tell_label(team, status)
+        hit = got.startswith(want)
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} team={str(team):14s} status={str(status):12s}"
+              f" -> {got}  （{why}）")
+
     print("\n== 担当の記録 ==")
     with tempfile.TemporaryDirectory() as d:
         env = dict(os.environ, HARNESS_TEAMS=str(pathlib.Path(d) / "teams.json"))
