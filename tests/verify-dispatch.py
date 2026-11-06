@@ -244,6 +244,24 @@ def main() -> int:
         ok &= bool(cond)
         print(f"  {'ok  ' if cond else 'FAIL'} {label}")
 
+    print("\n== 役割（どちらのエージェントが何をするか）==")
+    # 2026-11-06 に入れ替えた。plan を書くのは Claude（計画の雛形が届くのは Claude
+    # だけ）、レビューは Kiro（レビューの観点を常時読みに持つ）。**黙って戻ると
+    # 役割が逆になり、雛形を見ない plan を書いた本人がレビューする**形へ落ちる。
+    src = TOOL.read_text(encoding="utf-8")
+    for label, cond, why in [
+        ("投入の既定は claude", 'ap.add_argument("--agent", default="claude")' in src,
+         "plan を書くのは Claude"),
+        ("投入で連鎖しない", "chain = [prompt]\n" in src,
+         "**レビューは別セッション。** 同じセッションで続けると読み直しになる"),
+        ("渡し先を案内する", "--agent kiro --worktree branch:" in src,
+         "止まったあと何をすればよいかを出す"),
+    ]:
+        ok &= bool(cond)
+        print(f"  {'ok  ' if cond else 'FAIL'} {label}")
+        if not cond:
+            print(f"       {why}")
+
     print("\n== 番号を引く規則を自前で持っていないか ==")
     bad = [l for l in TOOL.read_text().splitlines()
            if re.search(r"""r["'][^"']*\\d\{[0-9]""", l)]
