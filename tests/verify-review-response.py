@@ -59,6 +59,23 @@ def main() -> int:
         print(f"  {'ok  ' if cond else 'FAIL'} description に「{must}」"
               f"{'' if cond else '  ← 出ていないと発火しない'}")
 
+    print("\n== 他者レビュー向けの規約に、範囲の印があるか ==")
+    # `selection.md`（候補を選んでもらう）は他者レビュー専用。単体で読んだ人が
+    # セルフレビューにも当てると、**全部出すはずの回で絞る**ことになる。
+    # 主張は `judgement.md` が持つので、ここには**範囲の印だけ**を置く。
+    sel = SKILL.parent.parent / "review-discipline" / "selection.md"
+    if sel.exists():
+        head = sel.read_text(encoding="utf-8")[:300]
+        cond = "他者レビュー向け" in head
+        ok &= cond
+        print(f"  {'ok  ' if cond else 'FAIL'} selection.md の冒頭に範囲の印がある")
+        # **主張を2箇所に持たない。** 印だけで、選ばない理由は書かない
+        dup = "候補を絞らず全部出す" in sel.read_text(encoding="utf-8")
+        ok &= not dup
+        print(f"  {'ok  ' if not dup else 'FAIL'} 判定の規約を写していない（二重持ちにしない）")
+    else:
+        print("  SKIP: selection.md が無い")
+
     print("\n" + ("すべて PASS" if ok else "FAIL あり"))
     print("NOTE: 書いてあるかだけを見る。実際にそう振る舞うかは出力で測る")
     return 0 if ok else 1
