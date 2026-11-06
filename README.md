@@ -177,6 +177,45 @@ at-rev <rev> --scope 'src/**' --dry-run        # 存在差だけ見る
 at-rev <rev> --bring bin -- ./bin/survey --json
 ```
 
+### `bin/harness-ticket-of`
+
+ブランチ名からチケット番号を引く。**規則をここ1箇所に置く**ための道具で、規約の文書・
+棚卸し・board を更新する側が同じ処理を書き直さずに済む。
+
+**3値で返す。** 2値にすると「番号が無いのが正しい分」（起票しない変更）と「引けない分」が
+混ざり、規約を守っているブランチまで不明に積まれる。
+
+```bash
+harness-ticket-of                      # いまの枝
+harness-ticket-of --all-worktrees      # このリポジトリの全ワークツリー
+```
+
+終了コードは 0=ticket / 2=none / 3=unknown。**道具自身の失敗は 1** で、unknown と区別できる。
+
+### `bin/harness-branch-check`
+
+いまの枝から番号が引けないことを、**まだ直せるうちに**言う。
+
+PR を作った後にブランチ名を変えると、旧名の ref が消えた時点で**その PR は閉じる**。
+だから PR の有無を見てから言う。PR があるときや、**有無を確かめられなかったとき**は
+切り直しを勧めない。
+
+```bash
+harness-branch-check --plain           # 人が読む形
+```
+
+SessionStart hook に繋ぐと、セッションを始めた時に1度だけ言う。
+
+```json
+{ "hooks": { "SessionStart": [ { "hooks": [
+  { "type": "command", "command": "$HOME/work/dotfiles/bin/harness-branch-check || true" }
+] } ] } }
+```
+
+**`install.sh` は hook を配らない。** 上は手で足す。他のマシンでは再現しないので、
+使うマシンごとに入れること。
+
+
 
 ## 育てる道具
 
@@ -348,6 +387,8 @@ python3 tests/verify-dev-flow-risk.py      # dev-flow の静的整合性と負�
 python3 tests/verify-stage-reports.py  # 各段の報告が成果物から作られる形か
 python3 tests/verify-kiro-reach.py --run   # 合言葉で到達を測る（LLM を2回呼ぶ）
 python3 tests/verify-plan-status.py        # docs/*plan*.md に状態行があるか
+python3 tests/verify-ticket-of.py          # ブランチ名からチケット番号を引く判定（3値）
+python3 tests/verify-branch-check.py       # 切り直してよい場面でだけ勧めるか
 python3 tests/probe-skill-firing.py "レビューして"   # スキルが発火するかの実測（探針）
 ```
 
