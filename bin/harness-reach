@@ -16,6 +16,14 @@ Kiro は本文を埋め込まれた分しか読まず、**ポインタを辿ら�
 `harness-parts/` は**それを参照する agent を選んだときだけ**載る。ここを一緒にすると
 「配布物に入っている＝届く」という偽の緑になる（2026-11-02 に実際に出した）。
 
+**既定 agent は例外で、選ばなくても載る。** `chat.defaultAgent` が指す agent の資源は、
+agent を選べない入口でも載る。ここを見ないと**逆向きの嘘**になる。実際に載っているのに
+「選んだときだけ」と出し続け、**設定が戻って載らなくなっても表示が変わらない**ので、
+規約なしで走っていることに気づけない。`既定:` と `agent:` を分けて出す。
+
+**既定を読めなかったときは `agent:` へ倒す。** 読めないことを「既定が無い」と同じに
+扱わない。設定ファイルが壊れているだけで「載っている」と言うほうが害が大きい。
+
 **入口は人によって違う。** 素の Kiro CLI なら agent を選べるので `agent:` のものも載る。
 agent を選べない入口（ラッパーによってはそうなる）では `常時` だけが載る。
 **この道具は特定の入口を既定にしない。** どちらに当たるかは使う人が知っている。
@@ -28,12 +36,36 @@ agent を選べない入口（ラッパーによってはそうなる）では `
 """
 import argparse
 import importlib.machinery
+import json
 import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+DEFAULT_AGENT_KEY = "chat.defaultAgent"
+
+
+def read_default_agent(settings=None):
+    """既定 agent の名前。**読めなければ None**（「既定が無い」と区別する）。"""
+    p = settings or (Path.home() / ".kiro" / "settings" / "cli.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get(DEFAULT_AGENT_KEY) or None
+    except (OSError, ValueError):
+        return None
+
+
+def part_status(who, default_agent):
+    """その部品を指す agent の一覧から、載り方を決める。
+
+    `既定:名前` は**選ばなくても載る**。`agent:名前` は選んだときだけ。
+    既定が読めなかった（None）ときは `agent:` 側へ倒す。**断定しない方へ。**
+    """
+    if default_agent and default_agent in who:
+        return "既定:" + default_agent
+    return "agent:" + ",".join(sorted(who)) if who else "agent:無し"
 
 
 def load_sync():
@@ -109,6 +141,12 @@ def main():
                 if part.name in text:
                     refs.setdefault(part.name, []).append(j.stem)
 
+    # **既定 agent は「選ばなくても載る」。** 設定を読まないと、実際には常に
+    # 載っているものを「選んだときだけ」と報告し続ける。設定が戻ったときに
+    # 表示が変わらないので、**規約なしで走っていることに気づけない。**
+    # 読めなかったときは None。「既定が無い」と**同じ扱いにしない**。
+    default_agent = read_default_agent()
+
     def kiro_status(f):
         if not probes(f):
             return "?"          # **判定材料が無いものを「届かない」と断定しない**
@@ -116,8 +154,7 @@ def main():
             return "常時"
         for part, d in parts.items():
             if reaches(f, d):
-                who = refs.get(part.name) or []
-                return "agent:" + ",".join(sorted(who)) if who else "agent:無し"
+                return part_status(refs.get(part.name) or [], default_agent)
         return "✗"
 
     # **Claude は symlink で丸ごと届く。** それも決め打ちせず、実際の向き先で見る
@@ -140,23 +177,33 @@ def main():
     if not claude_ok:
         print(f"!! ~/.claude/skills が {hs.SKILLS} を向いていない。install.sh を実行する\n")
 
-    print("  kiro 常時=どの入口でも載る / agent:名前=その agent を選べる入口でだけ載る")
-    print("       agent を選べない入口（ラッパー等）では 常時 だけが載る")
+    print("  kiro 常時=どの入口でも載る / 既定:名前=既定 agent なので選ばなくても載る")
+    print("       agent:名前=その agent を選べる入口でだけ載る")
+    print("       agent を選べない入口（ラッパー等）では 常時 と 既定 だけが載る")
     print("  codex △=案内だけ（開けば読める）   ✗=届かない\n")
     missing = []
+    always = 0      # 常時（steering）
+    by_default = 0  # 既定 agent 経由。**設定が戻れば消える**ので常時とは分けて数える
     for f in files:
         name = f"{f.parent.name}/{f.name}"
         k = kiro_status(f)
         c = reaches(f, codex)
         codex_mark = "✓" if c else ("△" if f.name in codex or str(f.parent) in codex else "✗")
         print(f"  {name:<42} claude:{'✓' if claude_ok else '✗'}  kiro:{k:<22} codex:{codex_mark}")
-        if k != "常時":
+        if k == "常時":
+            always += 1
+        elif k.startswith("既定:"):
+            by_default += 1
+        else:
             missing.append((name, k))
 
     if missing:
         gated = [(n, k) for n, k in missing if k.startswith("agent:")]
         never = [(n, k) for n, k in missing if not k.startswith("agent:")]
-        print(f"\n   どの入口でも載る              {len(files) - len(missing)} 件")
+        print(f"\n   どの入口でも載る              {always} 件")
+        if by_default:
+            print(f"   既定 agent なので載る          {by_default} 件"
+                  f"（既定が変われば消える。{DEFAULT_AGENT_KEY} を見ている）")
         print(f"   agent を選べる入口でだけ載る   {len(gated)} 件")
         print(f"!! どこにも載らない              {len(never)} 件")
         for n, k in gated:
