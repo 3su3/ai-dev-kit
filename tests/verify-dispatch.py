@@ -27,12 +27,25 @@ import types
 TOOL = pathlib.Path(__file__).resolve().parent.parent / "local" / "harness-dispatch"
 
 
+def _load_source(path, name="tool"):
+    """**バイトコードのキャッシュを通さずに読む。**
+
+    macOS の system Python は `sys.pycache_prefix` を持ち、`~/Library/Caches` 配下へ
+    バイトコードを溜める。ツリーの中に `__pycache__` が出ないので気づけない。
+    `SourceFileLoader` で読むと**古いコードが読まれることがあり**、変異を当てたのに
+    緑のまま、ソースと違う結果、という形で出る（2026-11-06 に実際に数時間溶かした）。
+
+    ソースを読んで `exec` すれば、キャッシュの経路を一切通らない。
+    """
+    ns = types.ModuleType(name)
+    ns.__file__ = str(path)
+    exec(compile(pathlib.Path(path).read_text(encoding="utf-8"), str(path), "exec"),
+         ns.__dict__)
+    return ns
+
+
 def _load():
-    loader = importlib.machinery.SourceFileLoader("dispatch", str(TOOL))
-    spec = importlib.util.spec_from_loader("dispatch", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    return _load_source(TOOL)
 
 
 def main() -> int:
@@ -149,6 +162,85 @@ def main() -> int:
         print(f"  {'ok  ' if ok_ else 'FAIL'} {label}")
         if not ok_:
             print(f"       {why}")
+
+    print("\n== 待ちの判定そのもの（落ち着いたと言い切ってよいか）==")
+    # **ケースごとにモジュールを読み直す。** 偽物を節をまたいで使い回すと、
+    # 前の節の差し替えが残って「同じコードなのに結果が変わる」ように見える。
+    # 実際にそれで長く詰まった。読み直しは安いので、毎回まっさらから始める。
+    import types as _t1
+    SAT = json.dumps({"result": {"wait": {"satisfied": True}}})
+    NOT = json.dumps({"result": {"wait": {"satisfied": False}}})
+
+    def _fake(seq):
+        calls = []
+        def f(cmd, **k):
+            rc, body = seq[min(len(calls), len(seq) - 1)]
+            calls.append(cmd)
+            return _t1.SimpleNamespace(returncode=rc, stdout=body, stderr="")
+        f.calls = calls
+        return f
+
+    for seq, want, why in [
+        ([(0, SAT), (0, SAT)], True,  "2回とも落ち着いた"),
+        ([(0, SAT), (0, NOT)], False, "**1回目だけ落ち着き、2回目は働いていた**"),
+        ([(0, NOT), (0, NOT)], False, "時間切れ"),
+        ([(1, ""), (1, "")],   None,  "**呼べなかった。落ち着いた扱いにしない**"),
+        ([(0, "こわれ"), (0, "こわれ")], None, "**返事が壊れている。同上**"),
+    ]:
+        mm = _load()
+        f = _fake(seq)
+        mm.run = f
+        got = mm.wait_idle("term_x", settle=0)
+        hit = got is want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} {why:38s} -> {got!r} "
+              f"(期待 {want!r}, 尋ねた回数 {len(f.calls)})")
+
+    print("\n== 連鎖: 待てなかったら次を送らない ==")
+    # **働いている最中へ送ると、前の段の途中に割り込む。** 待てなかったとき
+    # （取得失敗・時間切れ）に次を送らないことが、この仕組みの安全弁。
+    import types as _t2
+    real_wait = m.wait_idle
+    for verdict, want_sent, why in [
+        (True,  2, "落ち着いた → 2本とも送る"),
+        (False, 1, "**時間切れ → 2本目を送らない**"),
+        (None,  1, "**測れない → 2本目を送らない**"),
+    ]:
+        calls = []
+        m.wait_idle = lambda h, settle=None, _v=verdict: _v
+        m.run = lambda cmd, **k: (calls.append(cmd) or
+                                  _t2.SimpleNamespace(returncode=0, stdout="", stderr=""))
+        try:
+            got = m.deliver_chain("term_x", ["ひとつめ", "ふたつめ"])
+        finally:
+            m.wait_idle = real_wait
+            m.run = real_run
+        hit = got == want_sent
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} 待ちの結果={verdict!r} -> 送った {got} 本 "
+              f"(期待 {want_sent}) — {why}")
+
+    print("\n== 連鎖: 送れなかったらそこで止まる ==")
+    m.wait_idle = lambda h, settle=None: True
+    m.run = lambda cmd, **k: _t2.SimpleNamespace(returncode=1, stdout="", stderr="だめ")
+    try:
+        got = m.deliver_chain("term_x", ["ひとつめ", "ふたつめ"])
+    finally:
+        m.wait_idle = real_wait
+        m.run = real_run
+    hit = got == 0
+    ok &= hit
+    print(f"  {'ok  ' if hit else 'FAIL'} 1本目が送れない -> 送った {got} 本 (期待 0)")
+
+    print("\n== レビューのプロンプトが実装を止めているか ==")
+    rp = m.build_review_prompt(20001)
+    for label, cond in [("1行である", "\n" not in rp),
+                        ("マーカーが先頭", rp.startswith("#plan-self ")),
+                        ("[issue] が無くなるまで繰り返す", "繰り返す" in rp),
+                        ("**実装させない**", "実装はしない" in rp),
+                        ("人の承認で止まる", "人の承認を待つ" in rp)]:
+        ok &= bool(cond)
+        print(f"  {'ok  ' if cond else 'FAIL'} {label}")
 
     print("\n== 番号を引く規則を自前で持っていないか ==")
     bad = [l for l in TOOL.read_text().splitlines()

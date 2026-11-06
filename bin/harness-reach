@@ -35,10 +35,9 @@ agent を選べない入口（ラッパーによってはそうなる）では `
 **警告だけで止めない。** 止める価値が測れるまでは exit 0。
 """
 import argparse
-import importlib.machinery
 import json
-import importlib.util
 import subprocess
+import types
 import sys
 from pathlib import Path
 
@@ -70,12 +69,14 @@ def part_status(who, default_agent):
 
 def load_sync():
     """harness-sync を取り込む（`.py` ではないので loader を明示する）。"""
-    loader = importlib.machinery.SourceFileLoader("hsync", str(ROOT / "bin" / "harness-sync"))
-    spec = importlib.util.spec_from_loader("hsync", loader)
-    mod = importlib.util.module_from_spec(spec)
+    # **バイトコードのキャッシュを通さずに読む**（理由は harness-branch-check と同じ）
+    path = ROOT / "bin" / "harness-sync"
+    mod = types.ModuleType("hsync")
+    mod.__file__ = str(path)
     argv, sys.argv = sys.argv, ["harness-sync"]
     try:
-        loader.exec_module(mod)
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"),
+             mod.__dict__)
     finally:
         sys.argv = argv
     return mod
