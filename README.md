@@ -382,6 +382,7 @@ python3 tests/verify-harness-sync.py       # 配る内容（埋め込み・原�
 python3 tests/verify-harness-cleanup.py    # 配り先を変えたとき古い配布物が消えるか
 python3 tests/verify-install.py            # **使い捨ての HOME へ実際に入れて**確かめる
 python3 tests/verify-review-discipline.py  # 接頭辞の綴りと、取り違えやすい記述
+python3 tests/verify-review-response.py   # 決められないものを黙って振り分けないか
 python3 tests/verify-sq-time-import.py     # 取り込みの重なり判定（個人層の道具が無ければ SKIP）
 python3 tests/verify-sq-time-allocate.py   # 勤務時間への按分（個人層の道具が無ければ SKIP）
 python3 tests/verify-sq-time-board.py     # board の生死判定と、消さない prune（同上）
