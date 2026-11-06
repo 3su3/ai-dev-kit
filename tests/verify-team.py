@@ -65,6 +65,21 @@ def main() -> int:
     ok &= only_tool
     print(f"  {'ok  ' if only_tool else 'FAIL'} 起こすのは『道具』の行だけ")
 
+    print("\n== 同じことを繰り返し言わないか ==")
+    # 15分おきに回るので、状態を見ずに伝えると**同じことを1日に何十回も言う**。
+    # in-review を「もう伝えた」の印として使う。新しい記録を持たない。
+    for status, want, why in [
+        (None,          True,  "**状態が分からない。言い漏らすより重複がまし**"),
+        ("in-progress", True,  "まだ伝えていない"),
+        ("in-review",   False, "**もう伝えた。黙る**"),
+        ("todo",        True,  "別の状態なら伝える"),
+    ]:
+        got = m.should_tell(status)
+        hit = got is want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} status={status!r:14s} -> {'伝える' if got else '黙る'}"
+              f"  （{why}）")
+
     print("\n== 担当の記録 ==")
     with tempfile.TemporaryDirectory() as d:
         env = dict(os.environ, HARNESS_TEAMS=str(pathlib.Path(d) / "teams.json"))
