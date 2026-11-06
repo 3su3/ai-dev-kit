@@ -16,18 +16,32 @@ PR を作った後にブランチ名を変えると、旧名の ref が消えた
 import importlib.machinery
 import importlib.util
 import pathlib
+import types
 import sys
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin" / "harness-branch-check"
 RENAME = "git branch -m"
 
 
+def _load_source(path, name="tool"):
+    """**バイトコードのキャッシュを通さずに読む。**
+
+    macOS の system Python は `sys.pycache_prefix` を持ち、`~/Library/Caches` 配下へ
+    バイトコードを溜める。ツリーの中に `__pycache__` が出ないので気づけない。
+    `SourceFileLoader` で読むと**古いコードが読まれることがあり**、変異を当てたのに
+    緑のまま、ソースと違う結果、という形で出る（2026-11-06 に実際に数時間溶かした）。
+
+    ソースを読んで `exec` すれば、キャッシュの経路を一切通らない。
+    """
+    ns = types.ModuleType(name)
+    ns.__file__ = str(path)
+    exec(compile(pathlib.Path(path).read_text(encoding="utf-8"), str(path), "exec"),
+         ns.__dict__)
+    return ns
+
+
 def _load():
-    loader = importlib.machinery.SourceFileLoader("branch_check", str(BIN))
-    spec = importlib.util.spec_from_loader("branch_check", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    return _load_source(BIN)
 
 
 # (枝, verdict, PRの有無, 出すか, 切り直しを勧めてよいか, なぜ見るか)

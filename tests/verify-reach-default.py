@@ -17,18 +17,32 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
+import types
 import sys
 import tempfile
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin" / "harness-reach"
 
 
+def _load_source(path, name="tool"):
+    """**バイトコードのキャッシュを通さずに読む。**
+
+    macOS の system Python は `sys.pycache_prefix` を持ち、`~/Library/Caches` 配下へ
+    バイトコードを溜める。ツリーの中に `__pycache__` が出ないので気づけない。
+    `SourceFileLoader` で読むと**古いコードが読まれることがあり**、変異を当てたのに
+    緑のまま、ソースと違う結果、という形で出る（2026-11-06 に実際に数時間溶かした）。
+
+    ソースを読んで `exec` すれば、キャッシュの経路を一切通らない。
+    """
+    ns = types.ModuleType(name)
+    ns.__file__ = str(path)
+    exec(compile(pathlib.Path(path).read_text(encoding="utf-8"), str(path), "exec"),
+         ns.__dict__)
+    return ns
+
+
 def _load():
-    loader = importlib.machinery.SourceFileLoader("harness_reach", str(BIN))
-    spec = importlib.util.spec_from_loader("harness_reach", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    return _load_source(BIN)
 
 
 # (その部品を指す agent, 既定 agent, 期待, なぜ見るか)

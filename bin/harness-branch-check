@@ -19,8 +19,7 @@
 判定そのものは持たない。`harness-ticket-of` を呼ぶ。規則を2箇所に置くと古い方が残る。
 """
 import argparse
-import importlib.machinery
-import importlib.util
+import types
 import json
 import pathlib
 import subprocess
@@ -33,10 +32,13 @@ SKIP_PREFIXES = ("qa/",)
 
 
 def _resolver():
-    loader = importlib.machinery.SourceFileLoader("ticket_of", str(HERE / "harness-ticket-of"))
-    spec = importlib.util.spec_from_loader("ticket_of", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    # **バイトコードのキャッシュを通さずに読む。** macOS の system Python は
+    # sys.pycache_prefix を持ち ~/Library/Caches へ溜める。ツリーに __pycache__ が
+    # 出ないので気づけず、**古いコードが読まれる**ことがある（2026-11-06 実測）。
+    path = HERE / "harness-ticket-of"
+    mod = types.ModuleType("ticket_of")
+    mod.__file__ = str(path)
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), mod.__dict__)
     return mod
 
 

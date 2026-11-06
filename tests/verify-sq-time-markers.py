@@ -18,6 +18,7 @@
 import importlib.machinery
 import importlib.util
 import pathlib
+import types
 import sys
 
 TOOL = pathlib.Path(__file__).resolve().parent.parent / "local" / "sq-time"
@@ -41,10 +42,12 @@ def main() -> int:
     if not TOOL.exists():
         print(f"SKIP: {TOOL} が無い（個人層の道具）")
         return 0
-    loader = importlib.machinery.SourceFileLoader("sq_time", str(TOOL))
-    spec = importlib.util.spec_from_loader("sq_time", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    # **バイトコードのキャッシュを通さずに読む。** macOS の system Python は
+    # sys.pycache_prefix を持ち ~/Library/Caches へ溜めるため、SourceFileLoader だと
+    # 古いコードが読まれることがある（2026-11-06 実測）。
+    mod = types.ModuleType("sq_time")
+    mod.__file__ = str(TOOL)
+    exec(compile(TOOL.read_text(encoding="utf-8"), str(TOOL), "exec"), mod.__dict__)
 
     ok = True
     print("== マーカーから段へ ==")
