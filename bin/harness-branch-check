@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""harness-branch-check — いまのブランチ名から番号が引けるかを、**まだ直せるうちに**言う。
+
+    harness-branch-check            人向けに1行（SessionStart hook 用に JSON も出す）
+    harness-branch-check --plain    JSON を使わず素で出す
+
+**切り直してよい場面かを判定してから言う。** PR を作った後にブランチ名を変えると、
+旧名の ref が消えた時点で**その PR は閉じる**（head 側は retarget されない）。
+「番号を入れて」とだけ言う警告は、PR がある場面では**害になる**。
+
+    PR がまだ無い   → 切り直せる。`git branch -m` の形をそのまま出す
+    PR がもうある   → **切り直さない。** 番号はチケット側に書く
+
+**直し方を出さない警告は作らない。** 「無視してください」と言う警告は無いより悪い。
+
+**止めない。** 合意していない仕組みでブロックすると、作業の邪魔にしかならない。
+常に exit 0 で、言うだけ。
+
+判定そのものは持たない。`harness-ticket-of` を呼ぶ。規則を2箇所に置くと古い方が残る。
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+# 判定を持たない枝。既定の枝や検証環境向けの枝は番号を持たないのが普通。
+SKIP_BRANCHES = {"main", "master", "HEAD"}
+SKIP_PREFIXES = ("qa/",)
+
+
+def _resolver():
+    loader = importlib.machinery.SourceFileLoader("ticket_of", str(HERE / "harness-ticket-of"))
+    spec = importlib.util.spec_from_loader("ticket_of", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def advise(branch: str, verdict: str, has_pr):
+    """(出すか, 本文) を返す。has_pr は True / False / None(分からない)。
+
+    **分からないときは切り直しを勧めない。** PR があるのに勧めると取り返しがつかない。
+    """
+    if verdict != "unknown":
+        return (False, "")
+    if branch in SKIP_BRANCHES or branch.startswith(SKIP_PREFIXES):
+        return (False, "")
+    if has_pr is True:
+        return (True,
+                f"ブランチ `{branch}` から番号が引けない。"
+                f"**PR があるので切り直さない**（旧名の ref が消えると PR が閉じる）。"
+                f"番号はチケット側に書いて結びつける。")
+    if has_pr is None:
+        return (True,
+                f"ブランチ `{branch}` から番号が引けない。"
+                f"PR の有無を確かめられなかったので、切り直す前に `gh pr list --head {branch}` を見ること。")
+    return (True,
+            f"ブランチ `{branch}` から番号が引けない。まだ PR が無いので切り直せる:\n"
+            f"    git branch -m feature/<番号>-<英小文字とハイフンの要約>")
+
+
+def _branch():
+    r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _has_pr(branch: str):
+    """True/False/None。**取れなかったことを False と同じ顔にしない。**"""
+    try:
+        r = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number"],
+            capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return len(json.loads(r.stdout or "[]")) > 0
+    except json.JSONDecodeError:
+        return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--plain", action="store_true", help="JSON ではなく素で出す")
+    ap.add_argument("--branch", help="調べる枝（既定: いまの枝）")
+    a = ap.parse_args()
+
+    branch = a.branch or _branch()
+    if not branch or branch == "HEAD":
+        return 0
+    verdict, _ = _resolver().resolve(branch)
+    # PR の照会は unknown のときだけ。毎回ネットワークを叩かない。
+    show, msg = advise(branch, verdict, _has_pr(branch) if verdict == "unknown" else False)
+    if not show:
+        return 0
+    if a.plain:
+        print(msg)
+    else:
+        print(json.dumps({"systemMessage": msg}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

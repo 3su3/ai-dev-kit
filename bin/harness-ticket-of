@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""harness-ticket-of — ブランチ名からチケット番号を引く。**規則をここ1箇所に置く。**
+
+    harness-ticket-of                      いまのブランチ
+    harness-ticket-of <ブランチ> ...        指定した分
+    harness-ticket-of --all-worktrees      このリポジトリのワークツリー全部
+    harness-ticket-of --json
+
+**3値で返す。** 2値にすると「番号が無いのが正しい分」と「引けない分」が混ざり、
+規約を守っているブランチまで不明に積まれる。
+
+    ticket <番号>   引けた
+    none            番号が無いのが正しい（起票しない変更。`chore/` 等）
+    unknown         引けなかった。**推測しない**
+
+**なぜ道具にするか。** この規則は散ると必ず古い方が生き残る。ブランチ名から番号を引く
+処理は、規約の文書・棚卸し・board を更新する側の三箇所で同じことを書きたくなる。
+**書く場所を1つにして、残りはこれを呼ぶ。** 穴が見つかったとき直す先も1つになる。
+
+実際に穴があった（2026-11-06 実測）。`feature/20001` のように要約を付けないブランチは、
+`-要約` を必須にした正規表現から外れて **番号が在るのに unknown になっていた。**
+
+**日付で始まるブランチを番号と読まない。** `feature/2026-11-06-foo` の `2026` は
+4桁なので、素朴に書くとチケット番号として通る。**通っても誰も気づかない**ので弾く。
+
+**桁数で絞る。** 他チームの `feature/458_...` のような3桁は番号帯の外。**推測せず
+unknown にする。** 幅は `--digits` で変えられる。
+
+**接頭辞は問わない。** 番号が在ればそれを採る。`chore/` は「番号が無いときだけ」
+none にする。ここを `feature/` に限ると `chore/20005-...` を none と読む。
+限界として、`4〜6桁で始まる枝は番号と読む`ので、番号でない数字で始まる枝は誤る。
+
+終了コード: 0=ticket / 2=none / 3=unknown（入力が1本のときだけ）。
+**道具自身の失敗は 1。** unknown と同じ顔にしない。複数本・`--json` のときは常に 0。
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+
+# 番号が無いのが正しい接頭辞。起票しない変更（開発体験の改善・ツール整備など）。
+NONE_PREFIXES = ("chore",)
+# 番号は接頭辞を問わず拾う。`feature/` に限ると `chore/20005-...` のように
+# 番号を付けた枝を「番号なしが正しい」と読む（2026-11-06 にこの穴で1件落ちた）。
+# 日付で始まる枝。`2026` を番号と読ませない。
+DATE_HEAD = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[-_/]|$)")
+
+
+def _strip(branch: str) -> str:
+    for p in ("refs/heads/", "refs/remotes/", "origin/"):
+        if branch.startswith(p):
+            branch = branch[len(p):]
+    return branch.strip()
+
+
+def resolve(branch: str, lo: int = 4, hi: int = 6):
+    """(verdict, number|None) を返す。verdict は ticket / none / unknown。"""
+    b = _strip(branch)
+    if not b:
+        return ("unknown", None)
+    num = rf"(?P<n>\d{{{lo},{hi}}})"
+    # 残りは「無い」か「区切りで続く」。`20001` 単体と `20001-foo` の両方を通す。
+    tail = r"(?:[-_].*)?$"
+    pats = (
+        rf"^[^/]+/redmine[-_]?{num}{tail}",
+        rf"^[^/]+/{num}{tail}",
+    )
+    body = b.split("/", 1)[1] if "/" in b else b
+    if not DATE_HEAD.match(body):
+        for p in pats:
+            m = re.match(p, b)
+            if m:
+                return ("ticket", int(m.group("n")))
+    if b.split("/", 1)[0] in NONE_PREFIXES:
+        return ("none", None)
+    return ("unknown", None)
+
+
+def _git(args):
+    r = subprocess.run(["git"] + args, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else ""
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("branches", nargs="*")
+    ap.add_argument("--all-worktrees", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--digits", default="4,6", help="番号の桁の幅。既定 4,6")
+    a = ap.parse_args()
+
+    try:
+        lo, hi = (int(x) for x in a.digits.split(","))
+    except ValueError:
+        print(f"harness-ticket-of: --digits を読めない: {a.digits}", file=sys.stderr)
+        return 1
+
+    names = list(a.branches)
+    if a.all_worktrees:
+        names += [
+            ln.split(" ", 1)[1].replace("refs/heads/", "")
+            for ln in _git(["worktree", "list", "--porcelain"]).splitlines()
+            if ln.startswith("branch ")
+        ]
+    if not names:
+        cur = _git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+        if not cur:
+            print("harness-ticket-of: ブランチを決められない", file=sys.stderr)
+            return 1
+        names = [cur]
+
+    rows = [(b, *resolve(b, lo, hi)) for b in names]
+    if a.json:
+        print(json.dumps(
+            [{"branch": b, "verdict": v, "ticket": n} for b, v, n in rows],
+            ensure_ascii=False, indent=2))
+        return 0
+    for b, v, n in rows:
+        print(f"{v} {n if n is not None else '-'} {b}")
+    if len(rows) == 1:
+        return {"ticket": 0, "none": 2, "unknown": 3}[rows[0][1]]
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
