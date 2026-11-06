@@ -125,6 +125,31 @@ def main() -> int:
     ok &= hit
     print(f"  {'ok  ' if hit else 'FAIL'} handle=None -> 送った回数 {len(called)} (期待 0)")
 
+    print("\n== 投入プロンプトの形 ==")
+    # **届け方の制約がそのまま仕様になっている。** 改行があると途中で送信され、
+    # マーカーが先頭に無いと段が付かない。どちらも成功を返して静かに失敗する。
+    prompt = m.build_prompt("plan", 20001, "https://例.invalid")
+    checks = [
+        ("改行が無い",            "\n" not in prompt,
+         "**改行で途中送信され、残りが次の発話になる**"),
+        ("マーカーが先頭",        prompt.startswith("#plan "),
+         "sq-time は先頭か末尾しか見ない"),
+        ("番号が入る",            " 20001 " in prompt,
+         "段をチケットに紐づけるため"),
+        ("URL が入る",            "/issues/20001" in prompt,
+         "エージェントがチケットを読めるように"),
+        ("修正対象を要求する",     "修正対象" in prompt,
+         "**常時読みへ足さずに、ここで要求する**"),
+        ("道具の名を添える",       "plan-vs-diff" in prompt,
+         "何のために要るかを書く。直し方の無い指示にしない"),
+    ]
+    for label, got, why in checks:
+        ok_ = bool(got)
+        ok &= ok_
+        print(f"  {'ok  ' if ok_ else 'FAIL'} {label}")
+        if not ok_:
+            print(f"       {why}")
+
     print("\n== 番号を引く規則を自前で持っていないか ==")
     bad = [l for l in TOOL.read_text().splitlines()
            if re.search(r"""r["'][^"']*\\d\{[0-9]""", l)]
