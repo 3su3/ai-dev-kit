@@ -69,20 +69,26 @@ def main() -> int:
 
     print("\n== PR の状態が段より先に効くか ==")
     for pr, want, why in [
-        ({"number": 1, "state": "OPEN", "isDraft": True,  "ci": "緑"}, "人",
-         "Draft は人が Ready にする"),
+        ({"number": 1, "state": "OPEN", "isDraft": True,  "ci": "緑"}, "道具",
+         "**Draft は人の関門ではない。** 道具が Ready にする"),
         ({"number": 1, "state": "OPEN", "isDraft": False, "ci": "赤"}, "道具",
          "CI が赤なら直す"),
-        ({"number": 1, "state": "OPEN", "isDraft": False, "ci": "緑"}, "人",
-         "レビュー待ち / マージの判断"),
+        ({"number": 1, "state": "OPEN", "isDraft": False, "ci": "緑",
+          "open_threads": 0}, "人", "指摘が片付いた。マージの判断"),
+        ({"number": 1, "state": "OPEN", "isDraft": False, "ci": "緑",
+          "open_threads": 3}, "道具",
+         "**指摘を抱えたまま「マージを決める」と言わない**"),
+        ({"number": 1, "state": "OPEN", "isDraft": False, "ci": "緑",
+          "open_threads": None}, "不明",
+         "**未解決を引けない。0 と混ぜない**"),
         ({"number": 1, "state": "OPEN", "isDraft": False, "ci": None}, "不明",
          "**CI を引けない。緑にしない**"),
     ]:
         who, _ = m.next_step("実装:実機検証", busy=False, pr=pr)
         hit = who == want
         ok &= hit
-        print(f"  {'ok  ' if hit else 'FAIL'} draft={pr['isDraft']} ci={pr['ci']!r} -> {who}"
-              f"  （{why}）")
+        print(f"  {'ok  ' if hit else 'FAIL'} draft={pr['isDraft']} ci={pr['ci']!r} "
+              f"threads={pr.get('open_threads')!r} -> {who}  （{why}）")
 
     print("\n== 時間切れを「測れない」と混ぜないか ==")
     d = _load(DISP, "d")

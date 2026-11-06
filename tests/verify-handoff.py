@@ -89,9 +89,10 @@ def main() -> int:
     pr = m.prompt_for(d, "pr", 20001)
     for label, cond, why in [
         ("コミットする", "コミット" in pr, "PR の中身が無いと codex が見るものが無い"),
-        ("Draft PR を作る", "Draft PR" in pr, "**作らないと次の段が回らない**"),
-        ("Ready にはしない", "Ready にはしない" in pr,
-         "codex を走らせてよいかは人が決める"),
+        ("Ready で PR を作る", "**Ready で** PR を作る" in pr,
+         "**Draft で止めると codex が走らず、次の段が回らない**"),
+        ("Draft で止めない", "Draft" not in pr,
+         "セルフレビューが先に終わっているので、Draft が守るものが無い"),
         ("レビュワーを指名しない", "指名しない" in pr, "通知が飛ぶ"),
         ("4つに振り分ける", "4つに振り分ける" in pr,
          "セルフレビューの指摘は全部来る。対応要否は実装側が決める"),
