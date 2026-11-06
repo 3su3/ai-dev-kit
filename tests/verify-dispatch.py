@@ -172,8 +172,8 @@ def main() -> int:
     # 前の節の差し替えが残って「同じコードなのに結果が変わる」ように見える。
     # 実際にそれで長く詰まった。読み直しは安いので、毎回まっさらから始める。
     import types as _t1
-    SAT = json.dumps({"result": {"wait": {"satisfied": True}}})
-    NOT = json.dumps({"result": {"wait": {"satisfied": False}}})
+    SAT = json.dumps({"ok": True, "result": {"wait": {"satisfied": True}}})
+    NOT = json.dumps({"ok": True, "result": {"wait": {"satisfied": False}}})
 
     def _fake(seq):
         calls = []
@@ -203,8 +203,8 @@ def main() -> int:
     print("\n== 送ったことを「届いた」と同じ顔にしないか ==")
     # **今日の実害。** terminal send は通るのに TUI へ入らないことがある。道具は
     # 「送った」と報告し、段が立たないことで初めて気づいた。**働き始めたかで測る。**
-    SATZ = json.dumps({"result": {"wait": {"satisfied": True}}})
-    BUSY = json.dumps({"result": {"wait": {"satisfied": False}}})
+    SATZ = json.dumps({"ok": True, "result": {"wait": {"satisfied": True}}})
+    BUSY = json.dumps({"ok": True, "result": {"wait": {"satisfied": False}}})
     for seq, want, why in [
         ([(0, BUSY)],            True,  "待たされた＝働いている＝届いた"),
         ([(0, SATZ)],            False, "**暇なまま。届いていない**"),
