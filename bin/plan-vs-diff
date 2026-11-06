@@ -17,11 +17,30 @@ from pathlib import Path
 
 
 def changed(base):
+    """**3点比較で取る。** `{base}..HEAD` だと分岐後に base 側へ入った他人の変更まで
+    並び、こちらの変更として数えられる（実測で 6 件のはずが 19 件になった）。"""
     r = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"git diff が失敗した（base={base}）: {r.stderr.strip()[:200]}")
     return {x for x in r.stdout.split() if x}
+
+
+def uncommitted():
+    """作業ツリーの変更（未追跡を含む）。**取れなければ None。**"""
+    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    out = set()
+    for line in r.stdout.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip().strip('"')
+        # リネームは "旧 -> 新"。新しい方を採る
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        out.add(path)
+    return out
 
 
 def planned(path):
@@ -44,19 +63,35 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("plan")
     ap.add_argument("--base", default="origin/main")
+    ap.add_argument("--include-uncommitted", action="store_true",
+                    help="作業ツリーの変更も差分に数える（まだコミットしていない段階用）")
     a = ap.parse_args()
 
     # **未コミットの変更は差分に出ない。** 気づかないと、実装済みのものが
     # 「計画にあって未実装」として並び、**逆向きの偽の警告**になる。
-    dirty = subprocess.run(["git", "status", "--porcelain"],
-                           capture_output=True, text=True).stdout.split("\n")
-    dirty = [x for x in dirty if x.strip()]
-    if dirty:
-        print(f"!! 未コミットの変更が {len(dirty)} 件ある。**この出力には含まれない。**",
-              file=sys.stderr)
-        print("   先にコミットしてから回す。", file=sys.stderr)
+    dirty = uncommitted()
+    if dirty is None:
+        sys.exit("git status が取れない。**取れないことを「変更なし」と同じに扱わない。**")
 
     want, got = planned(a.plan), changed(a.base)
+    if dirty and not a.include_uncommitted:
+        # **不完全な材料で本文を出さない。** 以前はここで警告だけ出して比較を続けて
+        # いたため、未コミットで実装済みのものが「計画にあって未実装」として並んだ。
+        # 警告は上に出ているのに本文が逆を言うので、本文のほうが信じられる。
+        sys.exit(f"!! 未コミットの変更が {len(dirty)} 件ある。**この出力には含まれない。**\n"
+                 "   このまま比べると、実装済みのものが「計画にあって未実装」として並ぶ。\n"
+                 "   どちらかを選ぶ:\n"
+                 "     コミットしてから回す\n"
+                 "     --include-uncommitted を付けて、作業ツリーの変更も数える")
+    if a.include_uncommitted:
+        got = got | dirty
+    # **計画そのものは差分から外す。** 計画を書けば必ず変わるので、入れておくと
+    # 毎回「計画に無い変更」に並び、本物の巻き込みが埋もれる。
+    try:
+        rel = str(Path(a.plan).resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        rel = a.plan
+    got -= {rel, a.plan}
     if not want:
         sys.exit("計画から1件も拾えなかった。**0 件を「差なし」として扱わない。**"
                  "\n  見出しの下にパスが書かれているか確認する")
@@ -64,7 +99,8 @@ def main():
     missing = sorted(want - got)      # 計画にあって未実装
     extra = sorted(got - want)        # 計画に無い変更
 
-    print(f"# 計画 {len(want)} 件 / 差分 {len(got)} 件  （base={a.base}）")
+    where = f"base={a.base}" + ("＋作業ツリー" if a.include_uncommitted else "")
+    print(f"# 計画 {len(want)} 件 / 差分 {len(got)} 件  （{where}）")
     print(f"\n計画にあって未実装 {len(missing)} 件")
     for f in missing:
         print(f"  - {f}")

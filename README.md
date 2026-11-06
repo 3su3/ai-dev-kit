@@ -278,6 +278,7 @@ bin/review-outcomes <owner/repo> <レビュアーの login>
 
 ```bash
 bin/plan-vs-diff <計画のパス> --base origin/main
+bin/plan-vs-diff <計画のパス> --include-uncommitted   # まだコミットしていない段階
 ```
 
 実装の報告で「計画との差: なし」と書く前に回す。**記憶から書かせないための道具。**
@@ -390,6 +391,7 @@ python3 tests/verify-dev-flow-risk.py      # dev-flow の静的整合性と負�
 python3 tests/verify-stage-reports.py  # 各段の報告が成果物から作られる形か
 python3 tests/verify-kiro-reach.py --run   # 合言葉で到達を測る（LLM を2回呼ぶ）
 python3 tests/verify-plan-status.py        # docs/*plan*.md に状態行があるか
+python3 tests/verify-plan-vs-diff.py      # 不完全な材料で本文を出さないか
 python3 tests/verify-ticket-of.py          # ブランチ名からチケット番号を引く判定（3値）
 python3 tests/verify-branch-check.py       # 切り直してよい場面でだけ勧めるか
 python3 tests/verify-reach-default.py      # 既定 agent 経由で載るものを見分けるか
