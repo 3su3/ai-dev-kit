@@ -47,10 +47,11 @@ def main() -> int:
             ("人",   200),   # 人が要る → 状態だけ
             ("待ち", 100),   # 働いている → 何もしない
             ("不明", 100)]   # 測れない → 何もしない
-    wake, mark, unknown = m.wake_targets(rows, owners)
+    wake, mark, unknown, clear = m.wake_targets(rows, owners)
     for label, got, want in [("起こす", sorted(i for i, _ in wake), [100]),
                              ("状態だけ", sorted(i for i, _ in mark), [200]),
-                             ("担当不明", sorted(i for i, _ in unknown), [999])]:
+                             ("担当不明", sorted(i for i, _ in unknown), [999]),
+                             ("印を戻す", sorted(i for i, _ in clear), [100, 100, 100])]:
         hit = got == want
         ok &= hit
         print(f"  {'ok  ' if hit else 'FAIL'} {label}: {got} (期待 {want})")
@@ -64,6 +65,21 @@ def main() -> int:
     only_tool = all(any(w == "道具" for w, i2 in rows if i2 == i) for i, _ in wake)
     ok &= only_tool
     print(f"  {'ok  ' if only_tool else 'FAIL'} 起こすのは『道具』の行だけ")
+
+    print("\n== 人待ちを抜けたら印を戻すか ==")
+    # 戻すのを「道具で進む行」だけにすると、承認のあと実装が走っている間（待ち）に
+    # 戻る機会が無く、印が残り続ける。残ると**次に人が要るときに黙る**。
+    for who, want, why in [
+        ("待ち", True,  "**働いている。人待ちではない → 戻す**"),
+        ("不明", True,  "測れないだけで人待ちではない → 戻す"),
+        ("道具", True,  "道具で進む → 戻す"),
+        ("人",   False, "人待ちのまま → 残す"),
+    ]:
+        _, _, _, cl = m.wake_targets([(who, 100)], {"100": "chore/team-a"})
+        got = bool(cl)
+        hit = got is want
+        ok &= hit
+        print(f"  {'ok  ' if hit else 'FAIL'} {who:4s} -> {'戻す' if got else '残す'}  （{why}）")
 
     print("\n== 同じことを繰り返し言わないか ==")
     # 15分おきに回るので、状態を見ずに伝えると**同じことを1日に何十回も言う**。
