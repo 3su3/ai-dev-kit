@@ -388,6 +388,7 @@ python3 tests/verify-sq-time-allocate.py   # 勤務時間への按分（個人�
 python3 tests/verify-sq-time-board.py     # board の生死判定と、消さない prune（同上）
 python3 tests/verify-sq-time-markers.py   # マーカーが別の段に落ちないか（同上）
 python3 tests/verify-dispatch.py          # 投入してはいけない場面で立てないか（同上）
+python3 tests/verify-handoff.py           # 渡し先を取り違えないか（同上）
 python3 tests/verify-dev-flow-risk.py      # dev-flow の静的整合性と負例
 python3 tests/verify-stage-reports.py  # 各段の報告が成果物から作られる形か
 python3 tests/verify-kiro-reach.py --run   # 合言葉で到達を測る（LLM を2回呼ぶ）
