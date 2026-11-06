@@ -143,6 +143,12 @@ def main():
     for must in ("何人で見たか", "1件1行", "裏どり済み・問題なし", "未実行も書く",
                  "レビュー: 単独", "3件以下"):
         check(f"steering に出す形がある: {must}", must in rd)
+    # **Kiro はセルフレビュー専任。** 候補を絞る規約（selection.md）は配っていないので、
+    # 「絞らない」と書いたものが届いていないと、絞る側にも絞らない側にも倒れる。
+    for must in ("セルフレビューでは選ばない", "実装側が決める",
+                 "同梱: plan-checklist.md", "同梱: checklist.md", "同梱: judgement.md"):
+        check(f"steering に届いている: {must}", must in rd,
+              "Kiro はこれが無いとレビューの観点を持たない")
 
     # **同じ表が2箇所になった。** 片方が古くなるのを止める。
     def items(text, pat):

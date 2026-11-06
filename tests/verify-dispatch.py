@@ -237,6 +237,8 @@ def main() -> int:
     for label, cond in [("1行である", "\n" not in rp),
                         ("マーカーが先頭", rp.startswith("#plan-self ")),
                         ("[issue] が無くなるまで繰り返す", "繰り返す" in rp),
+                        ("**候補を絞らない**", "全部出す" in rp),
+                        ("対応要否は実装側", "実装側が決める" in rp),
                         ("**実装させない**", "実装はしない" in rp),
                         ("人の承認で止まる", "人の承認を待つ" in rp)]:
         ok &= bool(cond)
