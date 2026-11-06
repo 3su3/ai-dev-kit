@@ -46,7 +46,8 @@ def main() -> int:
     print("== 段ごとの渡し先 ==")
     for step, agent, approval in [("plan-self", "kiro", False),
                                   ("impl", "claude", True),
-                                  ("self", "kiro", False)]:
+                                  ("self", "kiro", False),
+                                  ("pr", "claude", False)]:
         s = m.STEPS[step]
         hit = s["agent"] == agent and s["approval"] is approval
         ok &= hit
@@ -77,6 +78,26 @@ def main() -> int:
         if not hit:
             print(f"       {reason}")
 
+    print("\n== セルフレビューの後、PR まで行けるか ==")
+    d = types.SimpleNamespace(build_review_prompt=lambda t: f"#plan-self {t} …")
+    # **ここで止めると次が回らない。** codex レビューは PR に対して走るので、
+    # PR が無いと止まる。Kiro はコミットしないし、実装した端末は閉じている。
+    pr = m.prompt_for(d, "pr", 20001)
+    for label, cond, why in [
+        ("コミットする", "コミット" in pr, "PR の中身が無いと codex が見るものが無い"),
+        ("Draft PR を作る", "Draft PR" in pr, "**作らないと次の段が回らない**"),
+        ("Ready にはしない", "Ready にはしない" in pr,
+         "codex を走らせてよいかは人が決める"),
+        ("レビュワーを指名しない", "指名しない" in pr, "通知が飛ぶ"),
+        ("4つに振り分ける", "4つに振り分ける" in pr,
+         "セルフレビューの指摘は全部来る。対応要否は実装側が決める"),
+        ("決められないものは聞く", "その場で聞いて" in pr, "黙って振り分けない"),
+    ]:
+        ok &= bool(cond)
+        print(f"  {'ok  ' if cond else 'FAIL'} {label}")
+        if not cond:
+            print(f"       {why}")
+
     print("\n== 止まる理由を取り違えないか ==")
     # 一覧を取れなかったのと、端末が無いのは**別のこと**。どちらも止まるので判断は
     # 同じだが、「端末が無い」と出ると、在る端末を探しに行くことになる。
@@ -90,7 +111,8 @@ def main() -> int:
 
     print("\n== 送る本文の形 ==")
     d = types.SimpleNamespace(build_review_prompt=lambda t: f"#plan-self {t} …")
-    for step, head in [("plan-self", "#plan-self "), ("impl", "#impl "), ("self", "#self ")]:
+    for step, head in [("plan-self", "#plan-self "), ("impl", "#impl "),
+                       ("self", "#self "), ("pr", "#self ")]:
         text = m.prompt_for(d, step, 20001)
         for label, cond in [(f"{step}: 1行である", "\n" not in text),
                             (f"{step}: マーカーが先頭", text.startswith(head))]:
