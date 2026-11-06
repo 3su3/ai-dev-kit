@@ -30,9 +30,9 @@ def _load(path, name="t"):
     return ns
 
 
-def term(handle, branch, orphaned=False, title="x"):
+def term(handle, branch, orphaned=False, title="x", agent=None):
     return {"handle": handle, "branch": f"refs/heads/{branch}",
-            "orphaned": orphaned, "title": title}
+            "orphaned": orphaned, "title": title, "agentIdentity": agent}
 
 
 def main() -> int:
@@ -68,6 +68,10 @@ def main() -> int:
         ([term("a", B, orphaned=True)],                False, "**抜け殻だけ**"),
         ([term("a", "feature/29999-y")],               False, "別の枝しか無い"),
         ([term("a", B), term("b", B, orphaned=True)],  True,  "抜け殻は数えない"),
+        ([term("a", B, agent="claude"), term("b", B)], True,
+         "**素のシェルが残っていても、動いている方を選ぶ**"),
+        ([term("a", B, agent="claude"), term("b", B, agent="kiro")], False,
+         "**2つ動いている。閉じ忘れ。渡さない**"),
         (None,                                         False, "**一覧を取れなかった**"),
     ]:
         got, reason = m.pick(rows, B)
@@ -97,6 +101,16 @@ def main() -> int:
         print(f"  {'ok  ' if cond else 'FAIL'} {label}")
         if not cond:
             print(f"       {why}")
+
+    print("\n== 動いているエージェントを名前で出すか ==")
+    # `agentIdentity` は動いているエージェントの名前を返し、/quit 済みの端末では
+    # None になる。**当初「Kiro は None」と読み違えた**（観測したのが /quit 済みの
+    # 端末だったため）。名前が出れば、閉じ忘れがどちらかすぐ分かる。
+    _, why2 = m.pick([term("a", B, agent="claude"), term("b", B, agent="kiro")], B)
+    for label, cond in [("claude を名指しする", "claude" in why2),
+                        ("kiro を名指しする", "kiro" in why2)]:
+        ok &= bool(cond)
+        print(f"  {'ok  ' if cond else 'FAIL'} {label}")
 
     print("\n== 止まる理由を取り違えないか ==")
     # 一覧を取れなかったのと、端末が無いのは**別のこと**。どちらも止まるので判断は
