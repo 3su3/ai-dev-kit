@@ -390,6 +390,7 @@ python3 tests/verify-plan-status.py        # docs/*plan*.md に状態行があ�
 python3 tests/verify-ticket-of.py          # ブランチ名からチケット番号を引く判定（3値）
 python3 tests/verify-branch-check.py       # 切り直してよい場面でだけ勧めるか
 python3 tests/verify-reach-default.py      # 既定 agent 経由で載るものを見分けるか
+python3 tests/verify-plan-state.py        # plan の完了を PR から見る（打ち切りと取得失敗）
 python3 tests/probe-skill-firing.py "レビューして"   # スキルが発火するかの実測（探針）
 ```
 
